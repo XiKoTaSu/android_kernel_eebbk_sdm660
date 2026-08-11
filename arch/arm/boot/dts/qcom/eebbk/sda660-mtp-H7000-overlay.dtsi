@@ -7,6 +7,26 @@
 #include "battery/sda660-battery-H7000.dtsi"
 #include "display/sda660-display-H7000.dtsi"
 
+/ {
+    reserved-memory {
+    
+        minirdump-reserved-memory@a00f0000 {
+			compatible = "qcom,minirdump";
+			reg = <0x00 0xa00f0000 0x00 0x19000>;
+		};
+
+		last_kmsg-reserved-mem@a010a000 {
+			compatible = "qcom,last_kmsg";
+			reg = <0x00 0xa0109000 0x00 0x10000>;
+		};
+
+		pstore-reserved-mem@a011a000 {
+			compatible = "qcom,pstore";
+			reg = <0x00 0xa0119000 0x00 0xe0000>;
+		};
+	};
+};
+
 &i2c_1 {
 	status = "ok";
 
