@@ -52,11 +52,12 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/workdir/clang/bin/:$PATH"
           export CROSS_COMPILE="aarch64-linux-gnu-"                    
           cd $GITHUB_WORKSPACE/workdir/source
+          export DTB_NAMES="qcom/eebbk/sda660-mtp-H7000"
           make O=out sdm660-perf_defconfig vendor/eebbk/H7000.config vendor/eebbk/sdm660-common.config CC=clang
-          make -j$(nproc --all) O=out CC=clang CLANG_TRIPLE=aarch64-linux-gnu- Image.gz
+          make -j$(nproc --all) O=out CC=clang CLANG_TRIPLE=aarch64-linux-gnu-
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
           name: kernel
-          path: workdir/source/out/arch/arm64/boot/Image.gz
+          path: workdir/source/out/arch/arm64/boot/Image.gz-dtb
