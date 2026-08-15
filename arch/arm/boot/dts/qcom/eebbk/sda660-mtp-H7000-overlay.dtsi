@@ -22,7 +22,7 @@
 
 		pstore_mem: pstore-reserved-mem@a011a000 {
 			compatible = "qcom,pstore";
-			reg = <0x00 0xa0119000 0x00 0xe0000>;
+			reg = <0x00 0xa0119000 0x00 0x1a0000>;
 		};
 	};
 	
@@ -30,11 +30,15 @@
 		compatible = "ramoops";
 		status = "ok";
 		memory-region = <&pstore_mem>;
-		console-size = <0x10000>;
+		console-size = <0x100000>;
 		record-size = <0x1000>;
 		ftrace-size = <0x1000>;
 		pmsg-size = <0x10000>;
 	};
+};
+
+&pm660_charger {
+    qcom,micro-usb; // Fix usb
 };
 
 &i2c_1 {
