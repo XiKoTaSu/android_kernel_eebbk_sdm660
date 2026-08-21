@@ -27,6 +27,7 @@
 #include "mdss_dba_utils.h"
 #include "mdss_debug.h"
 #include "mdss_livedisplay.h"
+#include "ktz8864.h"
 
 #define DT_CMD_HDR 6
 #define DEFAULT_MDP_TRANSFER_TIME 14000
@@ -247,6 +248,17 @@ static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
 
+static void mdss_dsi_panel_bklt_tkz8864(struct mdss_dsi_ctrl_pdata *ctrl,
+				       int level)
+{
+	int rc;
+
+	rc = tkz8864_set_bl(level);
+	if (rc)
+		pr_err("%s: tkz8864_set_bl() failed err=%d.\n",
+		       __func__, rc);
+}
+
 static int mdss_dsi_request_gpios(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	int rc = 0;
@@ -416,6 +428,11 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 			return rc;
 		}
 		if (!pinfo->cont_splash_enabled) {
+			if (tkz8864_is_ready()) {
+				tkz8864_bias_supply_en(1);
+				mdelay(12);
+			}
+
 			if (gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
 				rc = gpio_direction_output(
 					ctrl_pdata->disp_en_gpio, 1);
@@ -485,6 +502,11 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 			pr_debug("%s: Reset panel done\n", __func__);
 		}
 	} else {
+		if (tkz8864_is_ready()) {
+			tkz8864_bias_supply_en(0);
+			mdelay(12);
+		}
+
 		if (gpio_is_valid(ctrl_pdata->avdd_en_gpio)) {
 			if (ctrl_pdata->avdd_en_gpio_invert)
 				gpio_set_value((ctrl_pdata->avdd_en_gpio), 1);
@@ -908,6 +930,9 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 			if (sctrl)
 				mdss_dsi_panel_bklt_dcs(sctrl, bl_level);
 		}
+		break;
+	case BL_KTZ8864:
+		mdss_dsi_panel_bklt_tkz8864(ctrl_pdata, bl_level);
 		break;
 	default:
 		pr_err("%s: Unknown bl_ctrl configuration\n",
@@ -2454,6 +2479,10 @@ int mdss_panel_parse_bl_settings(struct device_node *np,
 
 			pr_debug("%s: Configured DCS_CMD bklt ctrl\n",
 								__func__);
+		} else if (!strcmp(data, "bl_ctrl_ktz8864")) {
+			ctrl_pdata->bklt_ctrl = BL_KTZ8864;
+			pr_info("%s: Configured KTZ8864 bklt ctrl\n",
+				__func__);
 		}
 	}
 	return 0;
