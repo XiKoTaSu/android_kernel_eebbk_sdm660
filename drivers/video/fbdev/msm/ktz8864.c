@@ -217,7 +217,7 @@ static int ktz8864_probe(struct i2c_client *client,
 	}
 
 	/* HW settle after enable */
-	mdelay(10);
+	mdelay(80);
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		pr_err("hgc I2C not supported\n");
