@@ -35,7 +35,7 @@ jobs:
       - name: 獲取核心源碼
         run: |
           git config --global core.longpaths true
-          git clone https://github.com/$GITHUB_REPOSITORY/ -b ${{ steps.branch-names.outputs.current_branch }} --depth 1 $GITHUB_WORKSPACE/workdir/source
+          git clone https://github.com/$GITHUB_REPOSITORY/ -b ${{ steps.branch-names.outputs.current_branch }} --recursive --depth 1 $GITHUB_WORKSPACE/workdir/source
 
       - name: 設定 Ccache 嘅容量
         uses: hendrikmuhs/ccache-action@v1.2
