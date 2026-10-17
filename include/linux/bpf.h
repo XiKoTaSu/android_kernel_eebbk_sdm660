@@ -19,6 +19,8 @@
 #include <linux/wait.h>
 #include <linux/mutex.h>
 #include <linux/u64_stats_sync.h>
+#include <linux/refcount.h>
+#include <linux/mutex.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -300,6 +302,7 @@ enum bpf_reg_type {
 	PTR_TO_TCP_SOCK,	 /* reg points to struct tcp_sock */
 	PTR_TO_TCP_SOCK_OR_NULL, /* reg points to struct tcp_sock or NULL */
 	PTR_TO_TP_BUFFER,	 /* reg points to a writable raw tp's buffer */
+	PTR_TO_XDP_SOCK,	 /* reg points to struct xdp_sock */
 	PTR_TO_BTF_ID,		 /* reg points to kernel struct */
 	PTR_TO_MEM,		 /* reg points to valid memory region */
 	PTR_TO_MEM_OR_NULL,	 /* reg points to valid memory region or NULL */
@@ -393,6 +396,111 @@ struct bpf_prog_stats {
 	struct u64_stats_sync syncp;
 };
 
+struct bpf_func_info_aux {
+	u16 linkage;
+	bool unreliable;
+};
+
+struct btf_func_model {
+	u8 ret_size;
+	u8 nr_args;
+	u8 arg_size[MAX_BPF_FUNC_ARGS];
+};
+
+/* Restore arguments before returning from trampoline to let original function
+ * continue executing. This flag is used for fentry progs when there are no
+ * fexit progs.
+ */
+#define BPF_TRAMP_F_RESTORE_REGS	BIT(0)
+/* Call original function after fentry progs, but before fexit progs.
+ * Makes sense for fentry/fexit, normal calls and indirect calls.
+ */
+#define BPF_TRAMP_F_CALL_ORIG		BIT(1)
+/* Skip current frame and return to parent.  Makes sense for fentry/fexit
+ * programs only. Should not be used with normal calls and indirect calls.
+ */
+#define BPF_TRAMP_F_SKIP_FRAME		BIT(2)
+
+/* Different use cases for BPF trampoline:
+ * 1. replace nop at the function entry (kprobe equivalent)
+ *    flags = BPF_TRAMP_F_RESTORE_REGS
+ *    fentry = a set of programs to run before returning from trampoline
+ *
+ * 2. replace nop at the function entry (kprobe + kretprobe equivalent)
+ *    flags = BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_SKIP_FRAME
+ *    orig_call = fentry_ip + MCOUNT_INSN_SIZE
+ *    fentry = a set of program to run before calling original function
+ *    fexit = a set of program to run after original function
+ *
+ * 3. replace direct call instruction anywhere in the function body
+ *    or assign a function pointer for indirect call (like tcp_congestion_ops->cong_avoid)
+ *    With flags = 0
+ *      fentry = a set of programs to run before returning from trampoline
+ *    With flags = BPF_TRAMP_F_CALL_ORIG
+ *      orig_call = original callback addr or direct function addr
+ *      fentry = a set of program to run before calling original function
+ *      fexit = a set of program to run after original function
+ */
+int arch_prepare_bpf_trampoline(void *image, struct btf_func_model *m, u32 flags,
+				struct bpf_prog **fentry_progs, int fentry_cnt,
+				struct bpf_prog **fexit_progs, int fexit_cnt,
+				void *orig_call);
+/* these two functions are called from generated trampoline */
+u64 notrace __bpf_prog_enter(void);
+void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start);
+
+enum bpf_tramp_prog_type {
+	BPF_TRAMP_FENTRY,
+	BPF_TRAMP_FEXIT,
+	BPF_TRAMP_MAX,
+	BPF_TRAMP_REPLACE, /* more than MAX */
+};
+
+struct bpf_trampoline {
+	/* hlist for trampoline_table */
+	struct hlist_node hlist;
+	/* serializes access to fields of this trampoline */
+	struct mutex mutex;
+	refcount_t refcnt;
+	u64 key;
+	struct {
+		struct btf_func_model model;
+		void *addr;
+	} func;
+	/* if !NULL this is BPF_PROG_TYPE_EXT program that extends another BPF
+	 * program by replacing one of its functions. func.addr is the address
+	 * of the function it replaced.
+	 */
+	struct bpf_prog *extension_prog;
+	/* list of BPF programs using this trampoline */
+	struct hlist_head progs_hlist[BPF_TRAMP_MAX];
+	/* Number of attached programs. A counter per kind. */
+	int progs_cnt[BPF_TRAMP_MAX];
+	/* Executable image of trampoline */
+	void *image;
+	u64 selector;
+};
+#ifdef CONFIG_BPF_JIT
+struct bpf_trampoline *bpf_trampoline_lookup(u64 key);
+int bpf_trampoline_link_prog(struct bpf_prog *prog);
+int bpf_trampoline_unlink_prog(struct bpf_prog *prog);
+void bpf_trampoline_put(struct bpf_trampoline *tr);
+#else
+static inline struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
+{
+	return NULL;
+}
+static inline int bpf_trampoline_link_prog(struct bpf_prog *prog)
+{
+	return -ENOTSUPP;
+}
+static inline int bpf_trampoline_unlink_prog(struct bpf_prog *prog)
+{
+	return -ENOTSUPP;
+}
+static inline void bpf_trampoline_put(struct bpf_trampoline *tr) {}
+#endif
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -404,9 +512,14 @@ struct bpf_prog_aux {
 	u32 func_cnt; /* used by non-func prog as the number of func progs */
 	u32 func_idx; /* 0 for non-func prog, the index in func array for func prog */
 	u32 attach_btf_id; /* in-kernel BTF type id to attach to */
+	struct bpf_prog *linked_prog;
 	bool verifier_zext; /* Zero extensions has been inserted by verifier. */
 	bool offload_requested;
 	bool attach_btf_trace; /* true if attaching to BTF-enabled raw tp */
+        bool btf_id_or_null_non0_off;
+        enum bpf_tramp_prog_type trampoline_prog_type;
+        struct bpf_trampoline *trampoline;
+        struct hlist_node tramp_hlist;
 	/* BTF_KIND_FUNC_PROTO for valid attach_btf_id */
 	const struct btf_type *attach_func_proto;
 	/* function name for valid attach_btf_id */
@@ -595,7 +708,7 @@ _out:							\
 #ifdef CONFIG_BPF_SYSCALL
 DECLARE_PER_CPU(int, bpf_prog_active);
 
-#define BPF_PROG_TYPE(_id, _name) \
+#define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
 	extern const struct bpf_prog_ops _name ## _prog_ops; \
 	extern const struct bpf_verifier_ops _name ## _verifier_ops;
 #define BPF_MAP_TYPE(_id, _ops) \
@@ -643,6 +756,44 @@ extern int sysctl_unprivileged_bpf_disabled;
 
 int bpf_map_new_fd(struct bpf_map *map, int flags);
 int bpf_prog_new_fd(struct bpf_prog *prog);
+
+struct bpf_link {
+	atomic64_t refcnt;
+	u32 id;
+	enum bpf_link_type type;
+	const struct bpf_link_ops *ops;
+	struct bpf_prog *prog;
+	struct work_struct work;
+};
+
+struct bpf_link_primer {
+	struct bpf_link *link;
+	struct file *file;
+	int fd;
+	u32 id;
+};
+
+struct bpf_link_ops {
+	void (*release)(struct bpf_link *link);
+	void (*dealloc)(struct bpf_link *link);
+	int (*detach)(struct bpf_link *link);
+	int (*update_prog)(struct bpf_link *link, struct bpf_prog *new_prog,
+			   struct bpf_prog *old_prog);
+	void (*show_fdinfo)(const struct bpf_link *link, struct seq_file *seq);
+	int (*fill_link_info)(const struct bpf_link *link,
+			      struct bpf_link_info *info);
+};
+
+void bpf_link_init(struct bpf_link *link, enum bpf_link_type type,
+		   const struct bpf_link_ops *ops, struct bpf_prog *prog);
+int bpf_link_prime(struct bpf_link *link, struct bpf_link_primer *primer);
+int bpf_link_settle(struct bpf_link_primer *primer);
+void bpf_link_cleanup(struct bpf_link_primer *primer);
+void bpf_link_inc(struct bpf_link *link);
+void bpf_link_put(struct bpf_link *link);
+int bpf_link_new_fd(struct bpf_link *link);
+struct file *bpf_link_new_file(struct bpf_link *link, int *reserved_fd);
+struct bpf_link *bpf_link_get_from_fd(u32 ufd);
 
 int bpf_obj_pin_user(u32 ufd, const char __user *pathname);
 int bpf_obj_get_user(const char __user *pathname, int flags);
@@ -704,6 +855,20 @@ struct net_device  *__dev_map_lookup_elem(struct bpf_map *map, u32 key);
 struct net_device  *__dev_map_hash_lookup_elem(struct bpf_map *map, u32 key);
 void __dev_map_insert_ctx(struct bpf_map *map, u32 index);
 void __dev_map_flush(struct bpf_map *map);
+bool bpf_xdp_sock_is_valid_access(int off, int size, enum bpf_access_type type,
+				  struct bpf_insn_access_aux *info);
+u32 bpf_xdp_sock_convert_ctx_access(enum bpf_access_type type,
+				    const struct bpf_insn *si,
+				    struct bpf_insn *insn_buf,
+				    struct bpf_prog *prog,
+				    u32 *target_size);
+
+struct bpf_cpu_map_entry *__cpu_map_lookup_elem(struct bpf_map *map, u32 key);
+void __cpu_map_insert_ctx(struct bpf_map *map, u32 index);
+void __cpu_map_flush(struct bpf_map *map);
+struct xdp_buff;
+int cpu_map_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_buff *xdp,
+		    struct net_device *dev_rx);
 
 /* Return map's numa specified by userspace */
 static inline int bpf_map_attr_numa_node(const union bpf_attr *attr)
@@ -713,6 +878,15 @@ static inline int bpf_map_attr_numa_node(const union bpf_attr *attr)
 }
 
 const struct bpf_func_proto *bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog);
+int btf_distill_func_proto(struct bpf_verifier_log *log, struct btf *btf,
+                           const struct btf_type *func_proto,
+                           const char *func_name, struct btf_func_model *m);
+u32 btf_resolve_helper_id(struct bpf_verifier_log *log, void *fn, int arg);
+
+struct bpf_reg_state;
+int btf_check_type_match(struct bpf_verifier_env *env, struct bpf_prog *prog,
+                         struct btf *btf, const struct btf_type *t);
+struct bpf_prog *bpf_prog_by_id(u32 id);
 #else /* !CONFIG_BPF_SYSCALL */
 static inline struct bpf_prog *bpf_prog_get(u32 ufd)
 {
@@ -1012,6 +1186,16 @@ static inline u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 #endif
 
 #ifdef CONFIG_INET
+struct sk_reuseport_kern {
+	struct sk_buff *skb;
+	struct sock *sk;
+	struct sock *selected_sk;
+	void *data_end;
+	u32 hash;
+	u32 reuseport_id;
+	bool bind_inany;
+};
+
 bool bpf_tcp_sock_is_valid_access(int off, int size, enum bpf_access_type type,
 				  struct bpf_insn_access_aux *info);
 

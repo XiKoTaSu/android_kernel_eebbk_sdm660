@@ -64,6 +64,7 @@ source "net/packet/Kconfig"
 source "net/unix/Kconfig"
 source "net/xfrm/Kconfig"
 source "net/iucv/Kconfig"
+source "net/xdp/Kconfig"
 
 config INET
 	bool "TCP/IP networking"
@@ -217,6 +218,8 @@ source "net/decnet/netfilter/Kconfig"
 source "net/bridge/netfilter/Kconfig"
 
 endif
+
+source "net/bpfilter/Kconfig"
 
 source "net/dccp/Kconfig"
 source "net/sctp/Kconfig"
@@ -453,6 +456,13 @@ config DST_CACHE
 	bool
 	default n
 
+config GRO_CELLS
+	bool
+	default n
+
+config PAGE_POOL
+	bool
+
 endif   # if NET
 
 # Used by archs to tell that they support BPF JIT compiler plus which flavour.
@@ -466,4 +476,3 @@ config HAVE_CBPF_JIT
 # Extended BPF JIT (eBPF)
 config HAVE_EBPF_JIT
 	bool
-

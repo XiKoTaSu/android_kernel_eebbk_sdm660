@@ -18,6 +18,11 @@ obj-$(CONFIG_INET)		+= ipv4/
 obj-$(CONFIG_XFRM)		+= xfrm/
 obj-$(CONFIG_UNIX_SCM)		+= unix/
 obj-$(CONFIG_NET)		+= ipv6/
+ifneq ($(CC_CAN_LINK),y)
+$(warning CC cannot link executables. Skipping bpfilter.)
+else
+obj-$(CONFIG_BPFILTER)		+= bpfilter/
+endif
 obj-$(CONFIG_PACKET)		+= packet/
 obj-$(CONFIG_NET_KEY)		+= key/
 obj-$(CONFIG_BRIDGE)		+= bridge/
@@ -80,3 +85,4 @@ obj-y				+= l3mdev/
 endif
 obj-$(CONFIG_IPC_ROUTER)	+= ipc_router/
 obj-$(CONFIG_RMNET_DATA) += rmnet_data/
+obj-$(CONFIG_XDP_SOCKETS)	+= xdp/

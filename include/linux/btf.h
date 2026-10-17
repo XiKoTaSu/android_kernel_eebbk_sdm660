@@ -84,10 +84,45 @@ static inline bool btf_type_is_func_proto(const struct btf_type *t)
 	return BTF_INFO_KIND(t->info) == BTF_KIND_FUNC_PROTO;
 }
 
+static inline u16 btf_type_vlen(const struct btf_type *t)
+{
+	return BTF_INFO_VLEN(t->info);
+}
+
+static inline u16 btf_func_linkage(const struct btf_type *t)
+{
+	return BTF_INFO_VLEN(t->info);
+}
+
+static inline bool btf_type_kflag(const struct btf_type *t)
+{
+	return BTF_INFO_KFLAG(t->info);
+}
+
+static inline u32 btf_member_bit_offset(const struct btf_type *struct_type,
+					const struct btf_member *member)
+{
+	return btf_type_kflag(struct_type) ? BTF_MEMBER_BIT_OFFSET(member->offset)
+					   : member->offset;
+}
+
+static inline u32 btf_member_bitfield_size(const struct btf_type *struct_type,
+					   const struct btf_member *member)
+{
+	return btf_type_kflag(struct_type) ? BTF_MEMBER_BITFIELD_SIZE(member->offset)
+					   : 0;
+}
+
+static inline const struct btf_member *btf_type_member(const struct btf_type *t)
+{
+	return (const struct btf_member *)(t + 1);
+}
+
 #ifdef CONFIG_BPF_SYSCALL
 const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id);
 const char *btf_name_by_offset(const struct btf *btf, u32 offset);
 struct btf *btf_parse_vmlinux(void);
+struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog);
 #else
 static inline const struct btf_type *btf_type_by_id(const struct btf *btf,
 						    u32 type_id)

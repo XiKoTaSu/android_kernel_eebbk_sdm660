@@ -1194,6 +1194,54 @@ static int rtnl_fill_link_ifmap(struct sk_buff *skb, struct net_device *dev)
 	return 0;
 }
 
+static u8 rtnl_xdp_attached_mode(struct net_device *dev, u32 *prog_id)
+{
+	ASSERT_RTNL();
+
+	*prog_id = dev_xdp_prog_id(dev, XDP_MODE_SKB);
+	if (*prog_id)
+		return XDP_ATTACHED_SKB;
+
+	*prog_id = dev_xdp_prog_id(dev, XDP_MODE_DRV);
+	if (*prog_id)
+		return XDP_ATTACHED_DRV;
+
+	*prog_id = dev_xdp_prog_id(dev, XDP_MODE_HW);
+	if (*prog_id)
+		return XDP_ATTACHED_HW;
+
+	return XDP_ATTACHED_NONE;
+}
+
+static int rtnl_xdp_fill(struct sk_buff *skb, struct net_device *dev)
+{
+	struct nlattr *xdp;
+	u32 prog_id;
+	int err;
+
+	xdp = nla_nest_start(skb, IFLA_XDP);
+	if (!xdp)
+		return -EMSGSIZE;
+
+	err = nla_put_u8(skb, IFLA_XDP_ATTACHED,
+			 rtnl_xdp_attached_mode(dev, &prog_id));
+	if (err)
+		goto err_cancel;
+
+	if (prog_id) {
+		err = nla_put_u32(skb, IFLA_XDP_PROG_ID, prog_id);
+		if (err)
+			goto err_cancel;
+	}
+
+	nla_nest_end(skb, xdp);
+	return 0;
+
+err_cancel:
+	nla_nest_cancel(skb, xdp);
+	return err;
+}
+
 static int rtnl_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
 			    int type, u32 pid, u32 seq, u32 change,
 			    unsigned int flags, u32 ext_filter_mask)

@@ -507,6 +507,139 @@ int cgroup_bpf_prog_detach(const union bpf_attr *attr, enum bpf_prog_type ptype)
 	return ret;
 }
 
+static void bpf_cgroup_link_release(struct bpf_link *link)
+{
+	struct bpf_cgroup_link *cg_link =
+		container_of(link, struct bpf_cgroup_link, link);
+	struct cgroup *cg;
+
+	/* link might have been auto-detached by dying cgroup already,
+	 * in that case our work is done here
+	 */
+	if (!cg_link->cgroup)
+		return;
+
+	mutex_lock(&cgroup_mutex);
+
+	/* re-check cgroup under lock again */
+	if (!cg_link->cgroup) {
+		mutex_unlock(&cgroup_mutex);
+		return;
+	}
+
+	WARN_ON(__cgroup_bpf_detach(cg_link->cgroup, NULL, cg_link,
+				    cg_link->type));
+
+	cg = cg_link->cgroup;
+	cg_link->cgroup = NULL;
+
+	mutex_unlock(&cgroup_mutex);
+	cgroup_put(cg);
+}
+
+static void bpf_cgroup_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_cgroup_link *cg_link =
+		container_of(link, struct bpf_cgroup_link, link);
+
+	kfree(cg_link);
+}
+
+static int bpf_cgroup_link_detach(struct bpf_link *link)
+{
+	bpf_cgroup_link_release(link);
+	return 0;
+}
+
+static void bpf_cgroup_link_show_fdinfo(const struct bpf_link *link,
+					struct seq_file *seq)
+{
+	struct bpf_cgroup_link *cg_link =
+		container_of(link, struct bpf_cgroup_link, link);
+	u64 cg_id = 0;
+
+	mutex_lock(&cgroup_mutex);
+	if (cg_link->cgroup)
+		cg_id = cgroup_id(cg_link->cgroup);
+	mutex_unlock(&cgroup_mutex);
+
+	seq_printf(seq,
+		   "cgroup_id:\t%llu\n"
+		   "attach_type:\t%d\n",
+		   cg_id,
+		   cg_link->type);
+}
+
+static int bpf_cgroup_link_fill_link_info(const struct bpf_link *link,
+					  struct bpf_link_info *info)
+{
+	struct bpf_cgroup_link *cg_link =
+		container_of(link, struct bpf_cgroup_link, link);
+	u64 cg_id = 0;
+
+	mutex_lock(&cgroup_mutex);
+	if (cg_link->cgroup)
+		cg_id = cgroup_id(cg_link->cgroup);
+	mutex_unlock(&cgroup_mutex);
+
+	info->cgroup.cgroup_id = cg_id;
+	info->cgroup.attach_type = cg_link->type;
+	return 0;
+}
+
+static const struct bpf_link_ops bpf_cgroup_link_lops = {
+	.release = bpf_cgroup_link_release,
+	.dealloc = bpf_cgroup_link_dealloc,
+	.detach = bpf_cgroup_link_detach,
+	.update_prog = cgroup_bpf_replace,
+	.show_fdinfo = bpf_cgroup_link_show_fdinfo,
+	.fill_link_info = bpf_cgroup_link_fill_link_info,
+};
+
+int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+{
+	struct bpf_link_primer link_primer;
+	struct bpf_cgroup_link *link;
+	struct cgroup *cgrp;
+	int err;
+
+	if (attr->link_create.flags)
+		return -EINVAL;
+
+	cgrp = cgroup_get_from_fd(attr->link_create.target_fd);
+	if (IS_ERR(cgrp))
+		return PTR_ERR(cgrp);
+
+	link = kzalloc(sizeof(*link), GFP_USER);
+	if (!link) {
+		err = -ENOMEM;
+		goto out_put_cgroup;
+	}
+	bpf_link_init(&link->link, BPF_LINK_TYPE_CGROUP, &bpf_cgroup_link_lops,
+		      prog);
+	link->cgroup = cgrp;
+	link->type = attr->link_create.attach_type;
+
+	err  = bpf_link_prime(&link->link, &link_primer);
+	if (err) {
+		kfree(link);
+		goto out_put_cgroup;
+	}
+
+	err = cgroup_bpf_attach(cgrp, NULL, NULL, link, link->type,
+				BPF_F_ALLOW_MULTI);
+	if (err) {
+		bpf_link_cleanup(&link_primer);
+		goto out_put_cgroup;
+	}
+
+	return bpf_link_settle(&link_primer);
+
+out_put_cgroup:
+	cgroup_put(cgrp);
+	return err;
+}
+
 int cgroup_bpf_prog_query(const union bpf_attr *attr,
 			  union bpf_attr __user *uattr)
 {
