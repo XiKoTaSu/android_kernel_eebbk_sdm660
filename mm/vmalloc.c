@@ -1900,6 +1900,26 @@ void *vmalloc_user(unsigned long size)
 		area = find_vm_area(ret);
 		area->flags |= VM_USERMAP;
 	}
+
+/**
+ *	vmalloc_user_node_flags  -  allocate zeroed virtually contiguous memory for userspace
+ *	@size:		allocation size
+ *	@node:		preferred node
+ *	@flags:		flags for allocation
+ *
+ *	The resulting memory area is zeroed so it can be mapped to userspace
+ *	without leaking data.
+ *
+ *	Return: pointer to the allocated memory or %NULL on error
+ */
+void *vmalloc_user_node_flags(unsigned long size, int node, gfp_t flags)
+{
+	return __vmalloc_node_range(size, SHMLBA,  VMALLOC_START, VMALLOC_END,
+				    flags | __GFP_ZERO, PAGE_KERNEL,
+				    VM_USERMAP, node,
+				    __builtin_return_address(0));
+}
+EXPORT_SYMBOL(vmalloc_user_node_flags);
 	return ret;
 }
 EXPORT_SYMBOL(vmalloc_user);
@@ -2006,6 +2026,13 @@ void *vmalloc_32_user(unsigned long size)
 	return ret;
 }
 EXPORT_SYMBOL(vmalloc_32_user);
+
+void *__vmalloc_node_flags_caller(unsigned long size, int node, gfp_t flags,
+				  void *caller)
+{
+	return __vmalloc_node_range(size, 1, VMALLOC_START, VMALLOC_END,
+				    flags, PAGE_KERNEL, VM_ALLOC, node, caller);
+}
 
 /*
  * small helper routine , copy contents to buf from addr.
