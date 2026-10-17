@@ -2050,27 +2050,13 @@ enum {
 	BPF_RB_PROD_POS = 3,
 };
 
-/* BPF_FUNC_bpf_ringbuf_commit, BPF_FUNC_bpf_ringbuf_discard, and
- * BPF_FUNC_bpf_ringbuf_output flags.
- */
-enum {
-	BPF_RB_NO_WAKEUP		= (1ULL << 0),
-	BPF_RB_FORCE_WAKEUP		= (1ULL << 1),
-};
-
-/* BPF_FUNC_bpf_ringbuf_query flags */
-enum {
-	BPF_RB_AVAIL_DATA = 0,
-	BPF_RB_RING_SIZE = 1,
-	BPF_RB_CONS_POS = 2,
-	BPF_RB_PROD_POS = 3,
-};
-
 /* BPF ring buffer constants */
 enum {
 	BPF_RINGBUF_BUSY_BIT		= (1U << 31),
 	BPF_RINGBUF_DISCARD_BIT		= (1U << 30),
 	BPF_RINGBUF_HDR_SZ		= 8,
+};
+
 /* BPF_FUNC_sk_assign flags in bpf_sk_lookup context. */
 enum {
 	BPF_SK_LOOKUP_F_REPLACE		= (1ULL << 0),
