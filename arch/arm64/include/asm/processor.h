@@ -156,6 +156,9 @@ static inline void cpu_relax(void)
 
 #define cpu_relax_lowlatency()                cpu_relax()
 
+struct task_struct;
+extern void *task_stack_page(const struct task_struct *task);
+
 /* Thread switching */
 extern struct task_struct *cpu_switch_to(struct task_struct *prev,
 					 struct task_struct *next);
