@@ -83,7 +83,8 @@ static inline struct sock *__inet6_lookup_skb(struct inet_hashinfo *hashinfo,
 					      const __be16 dport,
 					      int iif)
 {
-	struct sock *sk = skb_steal_sock(skb, refcounted);
+	bool refcounted = false;
+	struct sock *sk = skb_steal_sock(skb, &refcounted);
 
 	if (sk)
 		return sk;

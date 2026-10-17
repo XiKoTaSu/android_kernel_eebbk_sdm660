@@ -34,13 +34,16 @@ struct btf_type {
 	 * bits  0-15: vlen (e.g. # of struct's members)
 	 * bits 16-23: unused
 	 * bits 24-27: kind (e.g. int, ptr, array...etc)
-	 * bits 28-31: unused
+	 * bits 28-30: unused
+	 * bit     31: kind_flag, currently used by
+	 *             struct, union and fwd
 	 */
 	__u32 info;
 	/* "size" is used by INT, ENUM, STRUCT and UNION.
 	 * "size" tells the size of the type it is describing.
 	 *
-	 * "type" is used by PTR, TYPEDEF, VOLATILE, CONST and RESTRICT.
+	 * "type" is used by PTR, TYPEDEF, VOLATILE, CONST, RESTRICT,
+	 * FUNC and FUNC_PROTO.
 	 * "type" is a type_id referring to another type.
 	 */
 	union {
@@ -51,6 +54,7 @@ struct btf_type {
 
 #define BTF_INFO_KIND(info)	(((info) >> 24) & 0x0f)
 #define BTF_INFO_VLEN(info)	((info) & 0xffff)
+#define BTF_INFO_KFLAG(info)	((info) >> 31)
 
 #define BTF_KIND_UNKN		0	/* Unknown	*/
 #define BTF_KIND_INT		1	/* Integer	*/
@@ -64,8 +68,12 @@ struct btf_type {
 #define BTF_KIND_VOLATILE	9	/* Volatile	*/
 #define BTF_KIND_CONST		10	/* Const	*/
 #define BTF_KIND_RESTRICT	11	/* Restrict	*/
-#define BTF_KIND_MAX		11
-#define NR_BTF_KINDS		12
+#define BTF_KIND_FUNC		12	/* Function	*/
+#define BTF_KIND_FUNC_PROTO	13	/* Function Proto	*/
+#define BTF_KIND_VAR		14	/* Variable	*/
+#define BTF_KIND_DATASEC	15	/* Section	*/
+#define BTF_KIND_MAX		BTF_KIND_DATASEC
+#define NR_BTF_KINDS		(BTF_KIND_MAX + 1)
 
 /* For some specific BTF_KIND, "struct btf_type" is immediately
  * followed by extra data.
@@ -107,7 +115,13 @@ struct btf_array {
 struct btf_member {
 	__u32	name_off;
 	__u32	type;
-	__u32	offset;	/* offset in bits */
+	/* If the type info kind_flag is set, the btf_member offset
+	 * contains both member bitfield size and bit offset. The
+	 * bitfield size is set for bitfield members. If the type
+	 * info kind_flag is not set, the offset contains only bit
+	 * offset.
+	 */
+	__u32	offset;
 };
 
 /* If the struct/union type info kind_flag is set, the

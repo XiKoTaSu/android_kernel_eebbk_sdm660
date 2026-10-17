@@ -340,7 +340,8 @@ static inline struct sock *__inet_lookup_skb(struct inet_hashinfo *hashinfo,
 					     const __be16 sport,
 					     const __be16 dport)
 {
-	struct sock *sk = skb_steal_sock(skb, refcounted);
+	bool refcounted = false;
+	struct sock *sk = skb_steal_sock(skb, &refcounted);
 	const struct iphdr *iph = ip_hdr(skb);
 
 	if (sk)
