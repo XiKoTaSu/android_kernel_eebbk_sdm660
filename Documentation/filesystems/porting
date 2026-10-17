@@ -228,7 +228,7 @@ anything from oops to silent memory corruption.
 ---
 [mandatory]
 
-	FS_NOMOUNT is gone.  If you use it - just set MS_NOUSER in flags
+	FS_NOMOUNT is gone.  If you use it - just set SB_NOUSER in flags
 (see rootfs for one kind of solution and bdev/socket/pipe for another).
 
 ---
@@ -504,3 +504,16 @@ in your dentry operations instead.
 [mandatory]
 	__fd_install() & fd_install() can now sleep. Callers should not
 	hold a spinlock	or other resources that do not allow a schedule.
+--
+[mandatory]
+	->getxattr() and xattr_handler.get() get dentry and inode passed separately.
+	dentry might be yet to be attached to inode, so do _not_ use its ->d_inode
+	in the instances.  Rationale: !@#!@# security_d_instantiate() needs to be
+	called before we attach dentry to inode.
+--
+[mandatory]
+	->setxattr() and xattr_handler.set() get dentry and inode passed separately.
+	dentry might be yet to be attached to inode, so do _not_ use its ->d_inode
+	in the instances.  Rationale: !@#!@# security_d_instantiate() needs to be
+	called before we attach dentry to inode and !@#!@##!@$!$#!@#$!@$!@$ smack
+	->d_instantiate() uses not just ->getxattr() but ->setxattr() as well.

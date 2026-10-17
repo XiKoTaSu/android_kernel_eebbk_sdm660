@@ -224,33 +224,6 @@ bool ovl_is_private_xattr(const char *name)
 	return strncmp(name, OVL_XATTR_PRE_NAME, OVL_XATTR_PRE_LEN) == 0;
 }
 
-int ovl_setxattr(struct dentry *dentry, const char *name,
-		 const void *value, size_t size, int flags)
-{
-	int err;
-	struct dentry *upperdentry;
-
-	err = ovl_want_write(dentry);
-	if (err)
-		goto out;
-
-	err = -EPERM;
-	if (ovl_is_private_xattr(name))
-		goto out_drop_write;
-
-	err = ovl_copy_up(dentry);
-	if (err)
-		goto out_drop_write;
-
-	upperdentry = ovl_dentry_upper(dentry);
-	err = vfs_setxattr(upperdentry, name, value, size, flags);
-
-out_drop_write:
-	ovl_drop_write(dentry);
-out:
-	return err;
-}
-
 static bool ovl_need_xattr_filter(struct dentry *dentry,
 				  enum ovl_path_type type)
 {
@@ -258,18 +231,6 @@ static bool ovl_need_xattr_filter(struct dentry *dentry,
 		return S_ISDIR(dentry->d_inode->i_mode);
 	else
 		return false;
-}
-
-ssize_t ovl_getxattr(struct dentry *dentry, const char *name,
-		     void *value, size_t size)
-{
-	struct path realpath;
-	enum ovl_path_type type = ovl_path_real(dentry, &realpath);
-
-	if (ovl_need_xattr_filter(dentry, type) && ovl_is_private_xattr(name))
-		return -ENODATA;
-
-	return vfs_getxattr(realpath.dentry, name, value, size);
 }
 
 static bool ovl_can_list(const char *s)
@@ -316,39 +277,6 @@ ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size)
 	}
 
 	return res;
-}
-
-int ovl_removexattr(struct dentry *dentry, const char *name)
-{
-	int err;
-	struct path realpath;
-	enum ovl_path_type type = ovl_path_real(dentry, &realpath);
-
-	err = ovl_want_write(dentry);
-	if (err)
-		goto out;
-
-	err = -ENODATA;
-	if (ovl_need_xattr_filter(dentry, type) && ovl_is_private_xattr(name))
-		goto out_drop_write;
-
-	if (!OVL_TYPE_UPPER(type)) {
-		err = vfs_getxattr(realpath.dentry, name, NULL, 0);
-		if (err < 0)
-			goto out_drop_write;
-
-		err = ovl_copy_up(dentry);
-		if (err)
-			goto out_drop_write;
-
-		ovl_path_upper(dentry, &realpath);
-	}
-
-	err = vfs_removexattr(realpath.dentry, name);
-out_drop_write:
-	ovl_drop_write(dentry);
-out:
-	return err;
 }
 
 static bool ovl_open_need_copy_up(int flags, enum ovl_path_type type,
@@ -402,10 +330,7 @@ static const struct inode_operations ovl_file_inode_operations = {
 	.setattr	= ovl_setattr,
 	.permission	= ovl_permission,
 	.getattr	= ovl_getattr,
-	.setxattr	= ovl_setxattr,
-	.getxattr	= ovl_getxattr,
 	.listxattr	= ovl_listxattr,
-	.removexattr	= ovl_removexattr,
 };
 
 static const struct inode_operations ovl_symlink_inode_operations = {
@@ -414,10 +339,7 @@ static const struct inode_operations ovl_symlink_inode_operations = {
 	.put_link	= ovl_put_link,
 	.readlink	= ovl_readlink,
 	.getattr	= ovl_getattr,
-	.setxattr	= ovl_setxattr,
-	.getxattr	= ovl_getxattr,
 	.listxattr	= ovl_listxattr,
-	.removexattr	= ovl_removexattr,
 };
 
 struct inode *ovl_new_inode(struct super_block *sb, umode_t mode,

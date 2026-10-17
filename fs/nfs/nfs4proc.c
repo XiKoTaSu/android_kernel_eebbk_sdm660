@@ -5014,12 +5014,11 @@ static int nfs4_do_set_security_label(struct inode *inode,
 }
 
 static int
-nfs4_set_security_label(struct dentry *dentry, const void *buf, size_t buflen)
+nfs4_set_security_label(struct inode *inode, const void *buf, size_t buflen)
 {
 	struct nfs4_label ilabel, *olabel = NULL;
 	struct nfs_fattr fattr;
 	struct rpc_cred *cred;
-	struct inode *inode = d_inode(dentry);
 	int status;
 
 	if (!nfs_server_capable(inode, NFS_CAP_SECURITY_LABEL))
@@ -6284,60 +6283,44 @@ nfs4_release_lockowner(struct nfs_server *server, struct nfs4_lock_state *lsp)
 #define XATTR_NAME_NFSV4_ACL "system.nfs4_acl"
 
 static int nfs4_xattr_set_nfs4_acl(const struct xattr_handler *handler,
-				   struct dentry *dentry, const char *key,
-				   const void *buf, size_t buflen,
-				   int flags)
+				   struct dentry *unused, struct inode *inode,
+				   const char *key, const void *buf,
+				   size_t buflen, int flags)
 {
-	if (strcmp(key, "") != 0)
-		return -EINVAL;
-
-	return nfs4_proc_set_acl(d_inode(dentry), buf, buflen);
+	return nfs4_proc_set_acl(inode, buf, buflen);
 }
 
 static int nfs4_xattr_get_nfs4_acl(const struct xattr_handler *handler,
-				   struct dentry *dentry, const char *key,
-				   void *buf, size_t buflen)
+				   struct dentry *unused, struct inode *inode,
+				   const char *key, void *buf, size_t buflen)
 {
-	if (strcmp(key, "") != 0)
-		return -EINVAL;
-
-	return nfs4_proc_get_acl(d_inode(dentry), buf, buflen);
+	return nfs4_proc_get_acl(inode, buf, buflen);
 }
 
-static size_t nfs4_xattr_list_nfs4_acl(const struct xattr_handler *handler,
-				       struct dentry *dentry, char *list,
-				       size_t list_len, const char *name,
-				       size_t name_len)
+static bool nfs4_xattr_list_nfs4_acl(struct dentry *dentry)
 {
-	size_t len = sizeof(XATTR_NAME_NFSV4_ACL);
-
-	if (!nfs4_server_supports_acls(NFS_SERVER(d_inode(dentry))))
-		return 0;
-
-	if (list && len <= list_len)
-		memcpy(list, XATTR_NAME_NFSV4_ACL, len);
-	return len;
+	return nfs4_server_supports_acls(NFS_SERVER(d_inode(dentry)));
 }
 
 #ifdef CONFIG_NFS_V4_SECURITY_LABEL
 
 static int nfs4_xattr_set_nfs4_label(const struct xattr_handler *handler,
-				     struct dentry *dentry, const char *key,
-				     const void *buf, size_t buflen,
-				     int flags)
+				     struct dentry *unused, struct inode *inode,
+				     const char *key, const void *buf,
+				     size_t buflen, int flags)
 {
 	if (security_ismaclabel(key))
-		return nfs4_set_security_label(dentry, buf, buflen);
+		return nfs4_set_security_label(inode, buf, buflen);
 
 	return -EOPNOTSUPP;
 }
 
 static int nfs4_xattr_get_nfs4_label(const struct xattr_handler *handler,
-				     struct dentry *dentry, const char *key,
-				     void *buf, size_t buflen)
+				     struct dentry *unused, struct inode *inode,
+				     const char *key, void *buf, size_t buflen)
 {
 	if (security_ismaclabel(key))
-		return nfs4_get_security_label(d_inode(dentry), buf, buflen);
+		return nfs4_get_security_label(inode, buf, buflen);
 	return -EOPNOTSUPP;
 }
 
@@ -8830,20 +8813,14 @@ static const struct inode_operations nfs4_dir_inode_operations = {
 	.permission	= nfs_permission,
 	.getattr	= nfs_getattr,
 	.setattr	= nfs_setattr,
-	.getxattr	= generic_getxattr,
-	.setxattr	= generic_setxattr,
 	.listxattr	= nfs4_listxattr,
-	.removexattr	= generic_removexattr,
 };
 
 static const struct inode_operations nfs4_file_inode_operations = {
 	.permission	= nfs_permission,
 	.getattr	= nfs_getattr,
 	.setattr	= nfs_setattr,
-	.getxattr	= generic_getxattr,
-	.setxattr	= generic_setxattr,
 	.listxattr	= nfs4_listxattr,
-	.removexattr	= generic_removexattr,
 };
 
 const struct nfs_rpc_ops nfs_v4_clientops = {
@@ -8901,7 +8878,7 @@ const struct nfs_rpc_ops nfs_v4_clientops = {
 };
 
 static const struct xattr_handler nfs4_xattr_nfs4_acl_handler = {
-	.prefix	= XATTR_NAME_NFSV4_ACL,
+	.name	= XATTR_NAME_NFSV4_ACL,
 	.list	= nfs4_xattr_list_nfs4_acl,
 	.get	= nfs4_xattr_get_nfs4_acl,
 	.set	= nfs4_xattr_set_nfs4_acl,

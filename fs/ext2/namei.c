@@ -82,7 +82,7 @@ struct dentry *ext2_get_parent(struct dentry *child)
 	unsigned long ino = ext2_inode_by_name(d_inode(child), &dotdot);
 	if (!ino)
 		return ERR_PTR(-ENOENT);
-	return d_obtain_alias(ext2_iget(d_inode(child)->i_sb, ino));
+	return d_obtain_alias(ext2_iget(child->d_sb, ino));
 } 
 
 /*
@@ -427,10 +427,7 @@ const struct inode_operations ext2_dir_inode_operations = {
 	.mknod		= ext2_mknod,
 	.rename		= ext2_rename,
 #ifdef CONFIG_EXT2_FS_XATTR
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
 	.listxattr	= ext2_listxattr,
-	.removexattr	= generic_removexattr,
 #endif
 	.setattr	= ext2_setattr,
 	.get_acl	= ext2_get_acl,
@@ -440,10 +437,7 @@ const struct inode_operations ext2_dir_inode_operations = {
 
 const struct inode_operations ext2_special_inode_operations = {
 #ifdef CONFIG_EXT2_FS_XATTR
-	.setxattr	= generic_setxattr,
-	.getxattr	= generic_getxattr,
 	.listxattr	= ext2_listxattr,
-	.removexattr	= generic_removexattr,
 #endif
 	.setattr	= ext2_setattr,
 	.get_acl	= ext2_get_acl,
