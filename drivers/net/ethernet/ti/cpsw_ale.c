@@ -53,9 +53,6 @@
 
 static inline int cpsw_ale_get_field(u32 *ale_entry, u32 start, u32 bits)
 {
-	int idx;
-
-	idx    = start / 32;
 	start -= idx * 32;
 	idx    = 2 - idx; /* flip */
 	return (ale_entry[idx] >> start) & BITMASK(bits);
@@ -64,10 +61,6 @@ static inline int cpsw_ale_get_field(u32 *ale_entry, u32 start, u32 bits)
 static inline void cpsw_ale_set_field(u32 *ale_entry, u32 start, u32 bits,
 				      u32 value)
 {
-	int idx;
-
-	value &= BITMASK(bits);
-	idx    = start / 32;
 	start -= idx * 32;
 	idx    = 2 - idx; /* flip */
 	ale_entry[idx] &= ~(BITMASK(bits) << start);
