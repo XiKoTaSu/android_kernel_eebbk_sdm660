@@ -1029,6 +1029,37 @@ void skb_flow_dissector_init(struct flow_dissector *flow_dissector,
 			     const struct flow_dissector_key *key,
 			     unsigned int key_count);
 
+#ifdef CONFIG_NET
+int skb_flow_dissector_prog_query(const union bpf_attr *attr,
+				  union bpf_attr __user *uattr);
+int skb_flow_dissector_bpf_prog_attach(const union bpf_attr *attr,
+ 				       struct bpf_prog *prog);
+
+int skb_flow_dissector_bpf_prog_detach(const union bpf_attr *attr);
+#else
+static inline int skb_flow_dissector_prog_query(const union bpf_attr *attr,
+						union bpf_attr __user *uattr)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int skb_flow_dissector_bpf_prog_attach(const union bpf_attr *attr,
+						     struct bpf_prog *prog)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int skb_flow_dissector_bpf_prog_detach(const union bpf_attr *attr)
+{
+	return -EOPNOTSUPP;
+}
+#endif
+
+struct bpf_flow_keys;
+bool __skb_flow_bpf_dissect(struct bpf_prog *prog,
+			    const struct sk_buff *skb,
+			    struct flow_dissector *flow_dissector,
+			    struct bpf_flow_keys *flow_keys);
 bool __skb_flow_dissect(const struct sk_buff *skb,
 			struct flow_dissector *flow_dissector,
 			void *target_container,
@@ -2124,6 +2155,11 @@ static inline unsigned char *skb_mac_header(const struct sk_buff *skb)
 	return skb->head + skb->mac_header;
 }
 
+static inline u32 skb_mac_header_len(const struct sk_buff *skb)
+{
+	return skb->network_header - skb->mac_header;
+}
+
 static inline int skb_mac_header_was_set(const struct sk_buff *skb)
 {
 	return skb->mac_header != (typeof(skb->mac_header))~0U;
@@ -3021,6 +3057,9 @@ int skb_splice_bits(struct sk_buff *skb, struct sock *sk, unsigned int offset,
 		    ssize_t (*splice_cb)(struct sock *,
 					 struct pipe_inode_info *,
 					 struct splice_pipe_desc *));
+int skb_send_sock_locked(struct sock *sk, struct sk_buff *skb, int offset,
+			 int len);
+int skb_send_sock(struct sock *sk, struct sk_buff *skb, int offset, int len);
 void skb_copy_and_csum_dev(const struct sk_buff *skb, u8 *to);
 unsigned int skb_zerocopy_headlen(const struct sk_buff *from);
 int skb_zerocopy(struct sk_buff *to, struct sk_buff *from,

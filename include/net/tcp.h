@@ -37,6 +37,7 @@
 #include <net/inet_hashtables.h>
 #include <net/checksum.h>
 #include <net/request_sock.h>
+#include <net/sock_reuseport.h>
 #include <net/sock.h>
 #include <net/snmp.h>
 #include <net/ip.h>
@@ -46,6 +47,10 @@
 
 #include <linux/seq_file.h>
 #include <linux/memcontrol.h>
+
+#include <linux/bpf.h>
+#include <linux/filter.h>
+#include <linux/bpf-cgroup.h>
 
 extern struct inet_hashinfo tcp_hashinfo;
 
@@ -370,8 +375,11 @@ int tcp_v4_rcv(struct sk_buff *skb);
 
 int tcp_v4_tw_remember_stamp(struct inet_timewait_sock *tw);
 int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size);
+int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size);
 int tcp_sendpage(struct sock *sk, struct page *page, int offset, size_t size,
 		 int flags);
+int tcp_sendpage_locked(struct sock *sk, struct page *page, int offset,
+			size_t size, int flags);
 void tcp_release_cb(struct sock *sk);
 void tcp_wfree(struct sk_buff *skb);
 void tcp_write_timer_handler(struct sock *sk);
@@ -518,27 +526,44 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb);
  */
 static inline void tcp_synq_overflow(const struct sock *sk)
 {
-	unsigned long last_overflow = READ_ONCE(tcp_sk(sk)->rx_opt.ts_recent_stamp);
+	unsigned long last_overflow;
 	unsigned long now = jiffies;
 
+	if (sk->sk_reuseport) {
+		struct sock_reuseport *reuse;
+
+		reuse = rcu_dereference(sk->sk_reuseport_cb);
+		if (likely(reuse)) {
+			last_overflow = READ_ONCE(reuse->synq_overflow_ts);
+			if (time_after32(now, last_overflow + HZ))
+				WRITE_ONCE(reuse->synq_overflow_ts, now);
+			return;
+		}
+	}
+
+	last_overflow = tcp_sk(sk)->rx_opt.ts_recent_stamp;
 	if (!time_between32(now, last_overflow, last_overflow + HZ))
-		WRITE_ONCE(tcp_sk(sk)->rx_opt.ts_recent_stamp, now);
+		tcp_sk(sk)->rx_opt.ts_recent_stamp = now;
 }
 
 /* syncookies: no recent synqueue overflow on this listening socket? */
 static inline bool tcp_synq_no_recent_overflow(const struct sock *sk)
 {
-	unsigned long last_overflow = READ_ONCE(tcp_sk(sk)->rx_opt.ts_recent_stamp);
+	unsigned long last_overflow;
 
-	/* If last_overflow <= jiffies <= last_overflow + TCP_SYNCOOKIE_VALID,
-	 * then we're under synflood. However, we have to use
-	 * 'last_overflow - HZ' as lower bound. That's because a concurrent
-	 * tcp_synq_overflow() could update .ts_recent_stamp after we read
-	 * jiffies but before we store .ts_recent_stamp into last_overflow,
-	 * which could lead to rejecting a valid syncookie.
-	 */
-	return !time_between32(jiffies, last_overflow - HZ,
-			       last_overflow + TCP_SYNCOOKIE_VALID);
+	if (sk->sk_reuseport) {
+		struct sock_reuseport *reuse;
+
+		reuse = rcu_dereference(sk->sk_reuseport_cb);
+		if (likely(reuse)) {
+			last_overflow = READ_ONCE(reuse->synq_overflow_ts);
+			return time_after32(now, last_overflow +
+					    TCP_SYNCOOKIE_VALID);
+		}
+	}
+
+	last_overflow = tcp_sk(sk)->rx_opt.ts_recent_stamp;
+	return time_after(jiffies, last_overflow + TCP_SYNCOOKIE_VALID);
 }
 
 static inline u32 tcp_cookie_time(void)
@@ -636,8 +661,6 @@ static inline int tcp_bound_to_half_wnd(struct tcp_sock *tp, int pktsize)
 void tcp_get_info(struct sock *, struct tcp_info *);
 
 /* Read 'sendfile()'-style from a TCP socket */
-typedef int (*sk_read_actor_t)(read_descriptor_t *, struct sk_buff *,
-				unsigned int, size_t);
 int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 		  sk_read_actor_t recv_actor);
 
@@ -804,6 +827,21 @@ struct tcp_skb_cb {
 
 #define TCP_SKB_CB(__skb)	((struct tcp_skb_cb *)&((__skb)->cb[0]))
 
+
+static inline bool tcp_skb_bpf_ingress(const struct sk_buff *skb)
+{
+	return TCP_SKB_CB(skb)->bpf.flags & BPF_F_INGRESS;
+}
+
+static inline struct sock *tcp_skb_bpf_redirect_fetch(struct sk_buff *skb)
+{
+	return TCP_SKB_CB(skb)->bpf.sk_redir;
+}
+
+static inline void tcp_skb_bpf_redirect_clear(struct sk_buff *skb)
+{
+	TCP_SKB_CB(skb)->bpf.sk_redir = NULL;
+}
 
 #if IS_ENABLED(CONFIG_IPV6)
 /* This is the variant of inet6_iif() that must be used by TCP,
@@ -1856,5 +1894,156 @@ static inline void skb_set_tcp_pure_ack(struct sk_buff *skb)
 {
 	skb->truesize = 2;
 }
+
+static inline int tcp_inq(struct sock *sk)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	int answ;
+
+	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
+		answ = 0;
+	} else if (sock_flag(sk, SOCK_URGINLINE) ||
+		   !tp->urg_data ||
+		   before(tp->urg_seq, tp->copied_seq) ||
+		   !before(tp->urg_seq, tp->rcv_nxt)) {
+
+		answ = tp->rcv_nxt - tp->copied_seq;
+
+		/* Subtract 1, if FIN was received */
+		if (answ && sock_flag(sk, SOCK_DONE))
+			answ--;
+	} else {
+		answ = tp->urg_seq - tp->copied_seq;
+	}
+
+	return answ;
+}
+
+int tcp_peek_len(struct socket *sock);
+
+#define MODULE_ALIAS_TCP_ULP(name)				\
+	__MODULE_INFO(alias, alias_userspace, name);		\
+	__MODULE_INFO(alias, alias_tcp_ulp, "tcp-ulp-" name)
+
+struct sk_msg;
+struct sk_psock;
+
+int tcp_bpf_init(struct sock *sk);
+void tcp_bpf_reinit(struct sock *sk);
+int tcp_bpf_sendmsg_redir(struct sock *sk, struct sk_msg *msg, u32 bytes,
+			  int flags);
+int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
+		    int nonblock, int flags, int *addr_len);
+int __tcp_bpf_recvmsg(struct sock *sk, struct sk_psock *psock,
+		      struct msghdr *msg, int len);
+
+/* Call BPF_SOCK_OPS program that returns an int. If the return value
+ * is < 0, then the BPF op failed (for example if the loaded BPF
+ * program does not support the chosen operation or there is no BPF
+ * program loaded).
+ */
+#ifdef CONFIG_BPF
+static inline int tcp_call_bpf(struct sock *sk, int op)
+{
+	struct bpf_sock_ops_kern sock_ops;
+	int ret;
+
+	if (sk_fullsock(sk))
+		sock_owned_by_me(sk);
+
+	memset(&sock_ops, 0, sizeof(sock_ops));
+	sock_ops.sk = sk;
+	sock_ops.op = op;
+
+	ret = BPF_CGROUP_RUN_PROG_SOCK_OPS(&sock_ops);
+	if (ret == 0)
+		ret = sock_ops.reply;
+	else
+		ret = -1;
+	return ret;
+}
+#else
+static inline int tcp_call_bpf(struct sock *sk, int op)
+{
+	return -EPERM;
+}
+#endif
+
+static inline u32 tcp_timeout_init(struct sock *sk)
+{
+	int timeout;
+
+	timeout = tcp_call_bpf(sk, BPF_SOCK_OPS_TIMEOUT_INIT, 0, NULL);
+
+	if (timeout <= 0)
+		timeout = TCP_TIMEOUT_INIT;
+	return timeout;
+}
+
+static inline u32 tcp_rwnd_init_bpf(struct sock *sk)
+{
+	int rwnd;
+
+	rwnd = tcp_call_bpf(sk, BPF_SOCK_OPS_RWND_INIT, 0, NULL);
+
+	if (rwnd < 0)
+		rwnd = 0;
+	return rwnd;
+}
+
+static inline bool tcp_bpf_ca_needs_ecn(struct sock *sk)
+{
+	return (tcp_call_bpf(sk, BPF_SOCK_OPS_NEEDS_ECN, 0, NULL) == 1);
+}
+
+/*
+ * TCP listen path runs lockless.
+ * We forced "struct sock" to be const qualified to make sure
+ * we don't modify one of its field by mistake.
+ * Here, we increment sk_drops which is an atomic_t, so we can safely
+ * make sock writable again.
+ */
+static inline void tcp_listendrop(const struct sock *sk)
+{
+	atomic_inc(&((struct sock *)sk)->sk_drops);
+	NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_LISTENDROPS);
+}
+
+enum hrtimer_restart tcp_pace_kick(struct hrtimer *timer);
+
+/*
+ * Interface for adding Upper Level Protocols over TCP
+ */
+
+#define TCP_ULP_NAME_MAX	16
+#define TCP_ULP_MAX		128
+#define TCP_ULP_BUF_MAX		(TCP_ULP_NAME_MAX*TCP_ULP_MAX)
+
+enum {
+	TCP_ULP_TLS,
+	TCP_ULP_BPF,
+};
+
+struct tcp_ulp_ops {
+	struct list_head	list;
+
+	/* initialize ulp */
+	int (*init)(struct sock *sk);
+	/* cleanup ulp */
+	void (*release)(struct sock *sk);
+	/* clone ulp */
+	void (*clone)(const struct request_sock *req, struct sock *newsk,
+		      const gfp_t priority);
+
+	int		uid;
+	char		name[TCP_ULP_NAME_MAX];
+	bool		user_visible;
+	struct module	*owner;
+};
+int tcp_register_ulp(struct tcp_ulp_ops *type);
+void tcp_unregister_ulp(struct tcp_ulp_ops *type);
+int tcp_set_ulp(struct sock *sk, const char *name);
+void tcp_get_available_ulp(char *buf, size_t len);
+void tcp_cleanup_ulp(struct sock *sk);
 
 #endif	/* _TCP_H */

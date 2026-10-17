@@ -936,9 +936,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 
 	bpf_flush_icache(header, ctx.image + ctx.idx);
 
-	set_memory_ro((unsigned long)header, header->pages);
+	bpf_jit_binary_lock_ro(header);
 	prog->bpf_func = (void *)ctx.image;
 	prog->jited = 1;
+	prog->jited_len = image_size;
 
 out_off:
 	kfree(ctx.offset);
@@ -949,19 +950,17 @@ out:
 	return prog;
 }
 
-void bpf_jit_free(struct bpf_prog *prog)
+void *bpf_jit_alloc_exec(unsigned long size)
 {
-	unsigned long addr = (unsigned long)prog->bpf_func & PAGE_MASK;
-	struct bpf_binary_header *header = (void *)addr;
+	return __vmalloc_node_range(size, PAGE_SIZE, BPF_JIT_REGION_START,
+				    BPF_JIT_REGION_END, GFP_KERNEL,
+				    PAGE_KERNEL_EXEC, 0, NUMA_NO_NODE,
+				    __builtin_return_address(0));
+}
 
-	if (!prog->jited)
-		goto free_filter;
-
-	set_memory_rw(addr, header->pages);
-	bpf_jit_binary_free(header);
-
-free_filter:
-	bpf_prog_unlock_free(prog);
+void bpf_jit_free_exec(void *addr)
+{
+	return vfree(addr);
 }
 
 #ifdef CONFIG_CFI_CLANG

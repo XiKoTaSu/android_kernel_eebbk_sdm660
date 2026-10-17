@@ -44,7 +44,8 @@ const char *trace_print_bitmask_seq(struct trace_seq *p, void *bitmask_ptr,
 				    unsigned int bitmask_size);
 
 const char *trace_print_hex_seq(struct trace_seq *p,
-				const unsigned char *buf, int len);
+				const unsigned char *buf, int len,
+				bool spacing);
 
 const char *trace_print_array_seq(struct trace_seq *p,
 				   const void *buf, int count,
@@ -588,6 +589,11 @@ event_trigger_unlock_commit_regs(struct trace_event_file *file,
 unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx);
 int perf_event_attach_bpf_prog(struct perf_event *event, struct bpf_prog *prog);
 void perf_event_detach_bpf_prog(struct perf_event *event);
+int perf_event_query_prog_array(struct perf_event *event, void __user *info);
+int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *prog);
+int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_prog *prog);
+struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name);
+void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp);
 #else
 static inline unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
@@ -602,6 +608,26 @@ perf_event_attach_bpf_prog(struct perf_event *event, struct bpf_prog *prog)
 
 static inline void perf_event_detach_bpf_prog(struct perf_event *event) { }
 
+static inline int
+perf_event_query_prog_array(struct perf_event *event, void __user *info)
+{
+ 	return -EOPNOTSUPP;
+}
+static inline int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *p)
+{
+ 	return -EOPNOTSUPP;
+}
+static inline int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_prog *p)
+{
+ 	return -EOPNOTSUPP;
+}
+static inline struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name)
+{
+ 	return NULL;
+}
+static inline void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
+{
+}
 #endif
 
 enum {

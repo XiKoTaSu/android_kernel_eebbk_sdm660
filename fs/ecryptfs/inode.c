@@ -1107,15 +1107,9 @@ static int ecryptfs_removexattr(struct dentry *dentry, struct inode *inode,
 		rc = -EOPNOTSUPP;
 		goto out;
 	}
-<<<<<<< HEAD
-	mutex_lock(&lower_inode->i_mutex);
-	rc = lower_inode->i_op->removexattr(lower_dentry, name);
-	mutex_unlock(&lower_inode->i_mutex);
-=======
 	inode_lock(lower_inode);
 	rc = __vfs_removexattr(lower_dentry, name);
 	inode_unlock(lower_inode);
->>>>>>> b24795f6c8fc2 (xattr: Add __vfs_{get,set,remove}xattr helpers)
 out:
 	return rc;
 }
