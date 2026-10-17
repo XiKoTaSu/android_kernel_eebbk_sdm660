@@ -1,7 +1,12 @@
 #ifndef _BPF_CGROUP_H
 #define _BPF_CGROUP_H
 
+#include <linux/bpf.h>
+#include <linux/errno.h>
 #include <linux/jump_label.h>
+#include <linux/percpu.h>
+#include <linux/percpu-refcount.h>
+#include <linux/rbtree.h>
 #include <uapi/linux/bpf.h>
 
 struct sock;
