@@ -1900,6 +1900,9 @@ void *vmalloc_user(unsigned long size)
 		area = find_vm_area(ret);
 		area->flags |= VM_USERMAP;
 	}
+	return ret;
+}
+EXPORT_SYMBOL(vmalloc_user);
 
 /**
  *	vmalloc_user_node_flags  -  allocate zeroed virtually contiguous memory for userspace
@@ -1920,9 +1923,6 @@ void *vmalloc_user_node_flags(unsigned long size, int node, gfp_t flags)
 				    __builtin_return_address(0));
 }
 EXPORT_SYMBOL(vmalloc_user_node_flags);
-	return ret;
-}
-EXPORT_SYMBOL(vmalloc_user);
 
 /**
  *	vmalloc_node  -  allocate memory on a specific node
