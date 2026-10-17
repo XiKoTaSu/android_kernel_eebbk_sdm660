@@ -306,6 +306,7 @@ int arch_task_struct_size __read_mostly;
 
 void __init fork_init(void)
 {
+	int i;
 #ifndef CONFIG_ARCH_TASK_STRUCT_ALLOCATOR
 #ifndef ARCH_MIN_TASKALIGN
 #define ARCH_MIN_TASKALIGN	L1_CACHE_BYTES
@@ -325,6 +326,10 @@ void __init fork_init(void)
 	init_task.signal->rlim[RLIMIT_NPROC].rlim_max = max_threads/2;
 	init_task.signal->rlim[RLIMIT_SIGPENDING] =
 		init_task.signal->rlim[RLIMIT_NPROC];
+
+	for (i = 0; i < UCOUNT_COUNTS; i++) {
+		init_user_ns.ucount_max[i] = max_threads/2;
+	}
 }
 
 int __weak arch_dup_task_struct(struct task_struct *dst,
@@ -897,7 +902,9 @@ static int wait_for_vfork_done(struct task_struct *child,
 	int killed;
 
 	freezer_do_not_count();
+	cgroup_enter_frozen();
 	killed = wait_for_completion_killable(vfork);
+	cgroup_leave_frozen(false);
 	freezer_count();
 
 	if (killed) {
@@ -1152,7 +1159,7 @@ void __cleanup_sighand(struct sighand_struct *sighand)
 	if (atomic_dec_and_test(&sighand->count)) {
 		signalfd_cleanup(sighand);
 		/*
-		 * sighand_cachep is SLAB_DESTROY_BY_RCU so we can free it
+		 * sighand_cachep is SLAB_TYPESAFE_BY_RCU so we can free it
 		 * without an RCU grace period, see __lock_task_sighand().
 		 */
 		kmem_cache_free(sighand_cachep, sighand);
@@ -2057,7 +2064,7 @@ void __init proc_caches_init(void)
 {
 	sighand_cachep = kmem_cache_create("sighand_cache",
 			sizeof(struct sighand_struct), 0,
-			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_DESTROY_BY_RCU|
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_TYPESAFE_BY_RCU|
 			SLAB_NOTRACK, sighand_ctor);
 	signal_cachep = kmem_cache_create("signal_cache",
 			sizeof(struct signal_struct), 0,
