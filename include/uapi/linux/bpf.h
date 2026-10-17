@@ -2050,13 +2050,6 @@ enum {
 	BPF_RB_PROD_POS = 3,
 };
 
-/* BPF ring buffer constants */
-enum {
-	BPF_RINGBUF_BUSY_BIT		= (1U << 31),
-	BPF_RINGBUF_DISCARD_BIT		= (1U << 30),
-	BPF_RINGBUF_HDR_SZ		= 8,
-};
-
 /* BPF_FUNC_bpf_ringbuf_commit, BPF_FUNC_bpf_ringbuf_discard, and
  * BPF_FUNC_bpf_ringbuf_output flags.
  */
