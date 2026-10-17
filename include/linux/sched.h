@@ -3394,6 +3394,8 @@ static inline struct thread_info *task_thread_info(struct task_struct *task)
 	return &task->thread_info;
 }
 
+#ifndef __TASK_STACK_PAGE_INLINE
+#define __TASK_STACK_PAGE_INLINE
 /*
  * When accessing the stack of a non-current task that might exit, use
  * try_get_task_stack() instead.  task_stack_page will return a pointer
@@ -3403,6 +3405,7 @@ static inline void *task_stack_page(const struct task_struct *task)
 {
 	return task->stack;
 }
+#endif
 
 #define setup_thread_stack(new,old)	do { } while(0)
 
