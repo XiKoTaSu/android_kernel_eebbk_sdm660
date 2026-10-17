@@ -205,6 +205,29 @@ static inline int compute_score(struct sock *sk, struct net *net,
  * wildcarded during the search since they can never be otherwise.
  */
 
+/* called with rcu_read_lock() : No refcount taken on the socket */
+static inline struct sock *inet_lookup_run_bpf(struct net *net,
+					       struct inet_hashinfo *hashinfo,
+					       struct sk_buff *skb, int doff,
+					       __be32 saddr, __be16 sport,
+					       __be32 daddr, u16 hnum)
+{
+	struct sock *sk, *reuse_sk;
+	bool no_reuseport;
+
+	if (hashinfo != &tcp_hashinfo)
+		return NULL;
+
+	no_reuseport = bpf_sk_lookup_run_v4(net, IPPROTO_TCP,
+					    saddr, sport, daddr, hnum, &sk);
+	if (no_reuseport || IS_ERR_OR_NULL(sk))
+		return sk;
+
+	reuse_sk = lookup_reuseport(net, sk, skb, saddr, sport, daddr, hnum);
+	if (reuse_sk)
+		sk = reuse_sk;
+	return sk;
+}
 
 struct sock *__inet_lookup_listener(struct net *net,
 				    struct inet_hashinfo *hashinfo,
@@ -221,12 +244,16 @@ struct sock *__inet_lookup_listener(struct net *net,
 	bool select_ok = true;
 	u32 phash = 0;
 
-	rcu_read_lock();
-begin:
-	result = NULL;
-	hiscore = 0;
-	sk_nulls_for_each_rcu(sk, node, &ilb->head) {
-		score = compute_score(sk, net, hnum, daddr, dif);
+	if (static_branch_unlikely(&bpf_sk_lookup_enabled)) {
+		result = inet_lookup_run_bpf(net, hashinfo, skb, doff,
+					     saddr, sport, daddr, hnum);
+		if (result)
+			return result;
+	}
+
+	sk_for_each_rcu(sk, &ilb->head) {
+		score = compute_score(sk, net, hnum, daddr,
+				      dif, sdif, exact_dif);
 		if (score > hiscore) {
 			result = sk;
 			hiscore = score;

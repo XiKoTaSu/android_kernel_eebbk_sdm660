@@ -66,6 +66,17 @@ struct bpf_reg_state {
 		/* Max size from any of the above. */
 		unsigned long raw;
 	};
+	/* Fixed part of pointer offset, pointer types only */
+	s32 off;
+	/* For PTR_TO_PACKET, used to find other pointers with the same variable
+	 * offset, so they can share range knowledge.
+	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
+	 * came from, when one is tested for != NULL.
+	 * For PTR_TO_MEM_OR_NULL this is used to identify memory allocation
+	 * for the purpose of tracking that it's freed.
+	 * For PTR_TO_SOCKET this is used to share which pointers retain the
+	 * same reference to the socket, to determine proper reference freeing.
+	 */
 	u32 id;
 	/* Used to determine if any memory access using this register will
 	 * result in a bad access. These two fields must be last.
@@ -231,11 +242,13 @@ struct bpf_insn_aux_data {
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
 	int converted_op_size; /* the valid value width after perceived conversion */
 	int sanitize_stack_off; /* stack slot to be cleared */
-	bool seen; /* this insn was processed by the verifier */
+	u32 seen; /* this insn was processed by the verifier */
 	bool zext_dst; /* this insn zero extends dst reg */
 	u8 alu_state; /* used in combination with alu_limit */
-	bool prune_point;
+
+	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
+	bool prune_point;
 };
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
@@ -272,6 +285,7 @@ __printf(2, 3) void bpf_verifier_log_write(struct bpf_verifier_log *log,
 					   const char *fmt, ...);
 
 struct bpf_subprog_info {
+	/* 'start' has to be the first field otherwise find_subprog() won't work */
 	u32 start; /* insn idx of function entry point */
 	u32 linfo_idx; /* The idx to the main_prog->aux->linfo */
 	u16 stack_depth; /* max. stack depth used by this function */
@@ -306,6 +320,7 @@ struct bpf_verifier_env {
 		int *insn_stack;
 		int cur_stack;
 	} cfg;
+	u32 pass_cnt; /* number of times do_check() was called */
 	u32 subprog_cnt;
 	/* number of instructions analyzed by the verifier */
 	u32 prev_insn_processed, insn_processed;
@@ -354,5 +369,8 @@ bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
 			      struct bpf_insn *insn);
 void
 bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt);
+
+int check_ctx_reg(struct bpf_verifier_env *env,
+		  const struct bpf_reg_state *reg, int regno);
 
 #endif /* _LINUX_BPF_VERIFIER_H */

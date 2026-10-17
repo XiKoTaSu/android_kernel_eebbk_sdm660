@@ -46,13 +46,6 @@
 
 extern int max_threads;
 
-#define CAP_BSET	(void *)1
-#define CAP_PI		(void *)2
-
-static kernel_cap_t usermodehelper_bset = CAP_FULL_SET;
-static kernel_cap_t usermodehelper_inheritable = CAP_FULL_SET;
-static DEFINE_SPINLOCK(umh_sysctl_lock);
-static DECLARE_RWSEM(umhelper_sem);
 
 
 /*
@@ -186,3 +179,4 @@ int __request_module(bool wait, const char *fmt, ...)
 	return ret;
 }
 EXPORT_SYMBOL(__request_module);
+#endif /* CONFIG_MODULES */

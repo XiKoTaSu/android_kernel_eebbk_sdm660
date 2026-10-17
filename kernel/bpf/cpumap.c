@@ -144,6 +144,27 @@ free_cmap:
 	return ERR_PTR(err);
 }
 
+static void __cpu_map_queue_destructor(void *ptr)
+{
+	/* The tear-down procedure should have made sure that queue is
+	 * empty.  See __cpu_map_entry_replace() and work-queue
+	 * invoked cpu_map_kthread_stop(). Catch any broken behaviour
+	 * gracefully and warn once.
+	 */
+	if (WARN_ON_ONCE(ptr))
+		__free_page_frag(ptr);
+}
+
+static void put_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
+{
+	if (atomic_dec_and_test(&rcpu->refcnt)) {
+		/* The queue should be empty at this point */
+		ptr_ring_cleanup(rcpu->queue, __cpu_map_queue_destructor);
+		kfree(rcpu->queue);
+		kfree(rcpu);
+	}
+}
+
 static void get_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
 {
 	atomic_inc(&rcpu->refcnt);
@@ -165,8 +186,45 @@ static void cpu_map_kthread_stop(struct work_struct *work)
 	kthread_stop(rcpu->kthread);
 }
 
+/* For now, xdp_pkt is a cpumap internal data structure, with info
+ * carried between enqueue to dequeue. It is mapped into the top
+ * headroom of the packet, to avoid allocating separate mem.
+ */
+struct xdp_pkt {
+	void *data;
+	u16 len;
+	u16 headroom;
+	u16 metasize;
+	struct net_device *dev_rx;
+};
+
+/* Convert xdp_buff to xdp_pkt */
+static struct xdp_pkt *convert_to_xdp_pkt(struct xdp_buff *xdp)
+{
+	struct xdp_pkt *xdp_pkt;
+	int metasize;
+	int headroom;
+
+	/* Assure headroom is available for storing info */
+	headroom = xdp->data - xdp->data_hard_start;
+	metasize = xdp->data - xdp->data_meta;
+	metasize = metasize > 0 ? metasize : 0;
+	if (unlikely((headroom - metasize) < sizeof(*xdp_pkt)))
+		return NULL;
+
+	/* Store info in top of packet */
+	xdp_pkt = xdp->data_hard_start;
+
+	xdp_pkt->data = xdp->data;
+	xdp_pkt->len  = xdp->data_end - xdp->data;
+	xdp_pkt->headroom = headroom - sizeof(*xdp_pkt);
+	xdp_pkt->metasize = metasize;
+
+	return xdp_pkt;
+}
+
 static struct sk_buff *cpu_map_build_skb(struct bpf_cpu_map_entry *rcpu,
-					 struct xdp_frame *xdpf)
+					 struct xdp_pkt *xdp_pkt)
 {
 	unsigned int frame_size;
 	void *pkt_data_start;
@@ -305,9 +363,10 @@ static int cpu_map_kthread_run(void *data)
 	return 0;
 }
 
-struct bpf_cpu_map_entry *__cpu_map_entry_alloc(u32 qsize, u32 cpu, int map_id)
+static struct bpf_cpu_map_entry *__cpu_map_entry_alloc(u32 qsize, u32 cpu,
+						       int map_id)
 {
-	gfp_t gfp = GFP_ATOMIC|__GFP_NOWARN;
+	gfp_t gfp = GFP_KERNEL | __GFP_NOWARN;
 	struct bpf_cpu_map_entry *rcpu;
 	int numa, err;
 
@@ -363,7 +422,7 @@ free_rcu:
 	return NULL;
 }
 
-void __cpu_map_entry_free(struct rcu_head *rcu)
+static void __cpu_map_entry_free(struct rcu_head *rcu)
 {
 	struct bpf_cpu_map_entry *rcpu;
 	int cpu;
@@ -406,8 +465,8 @@ void __cpu_map_entry_free(struct rcu_head *rcu)
  * cpu_map_kthread_stop, which waits for an RCU graze period before
  * stopping kthread, emptying the queue.
  */
-void __cpu_map_entry_replace(struct bpf_cpu_map *cmap,
-			     u32 key_cpu, struct bpf_cpu_map_entry *rcpu)
+static void __cpu_map_entry_replace(struct bpf_cpu_map *cmap,
+				    u32 key_cpu, struct bpf_cpu_map_entry *rcpu)
 {
 	struct bpf_cpu_map_entry *old_rcpu;
 
@@ -419,7 +478,7 @@ void __cpu_map_entry_replace(struct bpf_cpu_map *cmap,
 	}
 }
 
-int cpu_map_delete_elem(struct bpf_map *map, void *key)
+static int cpu_map_delete_elem(struct bpf_map *map, void *key)
 {
 	struct bpf_cpu_map *cmap = container_of(map, struct bpf_cpu_map, map);
 	u32 key_cpu = *(u32 *)key;
@@ -432,8 +491,8 @@ int cpu_map_delete_elem(struct bpf_map *map, void *key)
 	return 0;
 }
 
-int cpu_map_update_elem(struct bpf_map *map, void *key, void *value,
-				u64 map_flags)
+static int cpu_map_update_elem(struct bpf_map *map, void *key, void *value,
+			       u64 map_flags)
 {
 	struct bpf_cpu_map *cmap = container_of(map, struct bpf_cpu_map, map);
 	struct bpf_cpu_map_entry *rcpu;
@@ -470,7 +529,7 @@ int cpu_map_update_elem(struct bpf_map *map, void *key, void *value,
 	return 0;
 }
 
-void cpu_map_free(struct bpf_map *map)
+static void cpu_map_free(struct bpf_map *map)
 {
 	struct bpf_cpu_map *cmap = container_of(map, struct bpf_cpu_map, map);
 	int cpu;
@@ -623,8 +682,8 @@ int cpu_map_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_buff *xdp,
 {
 	struct xdp_frame *xdpf;
 
-	xdpf = convert_to_xdp_frame(xdp);
-	if (unlikely(!xdpf))
+	xdp_pkt = convert_to_xdp_pkt(xdp);
+	if (unlikely(!xdp_pkt))
 		return -EOVERFLOW;
 
 	/* Info needed when constructing SKB on remote CPU */

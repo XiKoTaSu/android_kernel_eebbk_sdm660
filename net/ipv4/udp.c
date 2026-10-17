@@ -496,6 +496,20 @@ static u32 udp_ehashfn(const struct net *net, const __be32 laddr,
 			      udp_ehash_secret + net_hash_mix(net));
 }
 
+struct sock *lookup_reuseport(struct net *net, struct sock *sk,
+			      struct sk_buff *skb,
+			      __be32 saddr, __be16 sport,
+			      __be32 daddr, unsigned short hnum)
+{
+	u32 hash;
+
+	if (!sk->sk_reuseport || sk->sk_state == TCP_ESTABLISHED)
+		return NULL;
+
+	hash = udp_ehashfn(net, daddr, hnum, saddr, sport);
+	return reuseport_select_sock(sk, hash, skb, sizeof(struct udphdr));
+}
+
 /* called with read_rcu_lock() */
 static struct sock *udp4_lib_lookup2(struct net *net,
 		__be32 saddr, __be16 sport,
@@ -1810,6 +1824,7 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	struct rtable *rt = skb_rtable(skb);
 	__be32 saddr, daddr;
 	struct net *net = dev_net(skb->dev);
+	bool refcounted;
 
 	/*
 	 *  Validate the packet.
@@ -1835,7 +1850,7 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 	if (udp4_csum_init(skb, uh, proto))
 		goto csum_error;
 
-	sk = skb_steal_sock(skb);
+	sk = skb_steal_sock(skb, &refcounted);
 	if (sk) {
 		struct dst_entry *dst = skb_dst(skb);
 		int ret;
@@ -1844,7 +1859,8 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 			udp_sk_rx_dst_set(sk, dst);
 
 		ret = udp_queue_rcv_skb(sk, skb);
-		sock_put(sk);
+		if (refcounted)
+			sock_put(sk);
 		/* a return value > 0 means to resubmit the input, but
 		 * it wants the return to be -protocol, or 0
 		 */

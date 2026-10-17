@@ -3,6 +3,9 @@
 #include <linux/hash.h>
 #include <linux/bpf.h>
 #include <linux/filter.h>
+#include <linux/ftrace.h>
+#include <linux/rbtree_latch.h>
+#include <linux/perf_event.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -18,6 +21,46 @@ static struct hlist_head trampoline_table[TRAMPOLINE_TABLE_SIZE];
 
 /* serializes access to trampoline_table */
 static DEFINE_MUTEX(trampoline_mutex);
+
+void *bpf_jit_alloc_exec_page(void)
+{
+	void *image;
+
+	image = bpf_jit_alloc_exec(PAGE_SIZE);
+	if (!image)
+		return NULL;
+
+	set_vm_flush_reset_perms(image);
+	/* Keep image as writeable. The alternative is to keep flipping ro/rw
+	 * everytime new program is attached or detached.
+	 */
+	set_memory_x((long)image, 1);
+	return image;
+}
+
+void bpf_image_ksym_add(void *data, struct bpf_ksym *ksym)
+{
+	ksym->start = (unsigned long) data;
+	ksym->end = ksym->start + PAGE_SIZE;
+	bpf_ksym_add(ksym);
+	perf_event_ksymbol(PERF_RECORD_KSYMBOL_TYPE_BPF, ksym->start,
+			   PAGE_SIZE, false, ksym->name);
+}
+
+void bpf_image_ksym_del(struct bpf_ksym *ksym)
+{
+	bpf_ksym_del(ksym);
+	perf_event_ksymbol(PERF_RECORD_KSYMBOL_TYPE_BPF, ksym->start,
+			   PAGE_SIZE, true, ksym->name);
+}
+
+static void bpf_trampoline_ksym_add(struct bpf_trampoline *tr)
+{
+	struct bpf_ksym *ksym = &tr->ksym;
+
+	snprintf(ksym->name, KSYM_NAME_LEN, "bpf_trampoline_%llu", tr->key);
+	bpf_image_ksym_add(tr->image, ksym);
+}
 
 struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 {
@@ -39,7 +82,7 @@ struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 		goto out;
 
 	/* is_root was checked earlier. No need for bpf_jit_charge_modmem() */
-	image = bpf_jit_alloc_exec(PAGE_SIZE);
+	image = bpf_jit_alloc_exec_page();
 	if (!image) {
 		kfree(tr);
 		tr = NULL;
@@ -53,74 +96,140 @@ struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 	mutex_init(&tr->mutex);
 	for (i = 0; i < BPF_TRAMP_MAX; i++)
 		INIT_HLIST_HEAD(&tr->progs_hlist[i]);
-
-	set_vm_flush_reset_perms(image);
-	/* Keep image as writeable. The alternative is to keep flipping ro/rw
-	 * everytime new program is attached or detached.
-	 */
-	set_memory_x((long)image, 1);
 	tr->image = image;
+	INIT_LIST_HEAD_RCU(&tr->ksym.lnode);
+	bpf_trampoline_ksym_add(tr);
 out:
 	mutex_unlock(&trampoline_mutex);
 	return tr;
 }
 
-/* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
- * bytes on x86.  Pick a number to fit into PAGE_SIZE / 2
- */
-#define BPF_MAX_TRAMP_PROGS 40
+static int is_ftrace_location(void *ip)
+{
+	long addr;
+
+	addr = ftrace_location((long)ip);
+	if (!addr)
+		return 0;
+	if (WARN_ON_ONCE(addr != (long)ip))
+		return -EFAULT;
+	return 1;
+}
+
+static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
+{
+	void *ip = tr->func.addr;
+	int ret;
+
+	if (tr->func.ftrace_managed)
+		ret = unregister_ftrace_direct((long)ip, (long)old_addr);
+	else
+		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, NULL);
+	return ret;
+}
+
+static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_addr)
+{
+	void *ip = tr->func.addr;
+	int ret;
+
+	if (tr->func.ftrace_managed)
+		ret = modify_ftrace_direct((long)ip, (long)old_addr, (long)new_addr);
+	else
+		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, new_addr);
+	return ret;
+}
+
+/* first time registering */
+static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
+{
+	void *ip = tr->func.addr;
+	int ret;
+
+	ret = is_ftrace_location(ip);
+	if (ret < 0)
+		return ret;
+	tr->func.ftrace_managed = ret;
+
+	if (tr->func.ftrace_managed)
+		ret = register_ftrace_direct((long)ip, (long)new_addr);
+	else
+		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
+	return ret;
+}
+
+static struct bpf_tramp_progs *
+bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total)
+{
+	const struct bpf_prog_aux *aux;
+	struct bpf_tramp_progs *tprogs;
+	struct bpf_prog **progs;
+	int kind;
+
+	*total = 0;
+	tprogs = kcalloc(BPF_TRAMP_MAX, sizeof(*tprogs), GFP_KERNEL);
+	if (!tprogs)
+		return ERR_PTR(-ENOMEM);
+
+	for (kind = 0; kind < BPF_TRAMP_MAX; kind++) {
+		tprogs[kind].nr_progs = tr->progs_cnt[kind];
+		*total += tr->progs_cnt[kind];
+		progs = tprogs[kind].progs;
+
+		hlist_for_each_entry(aux, &tr->progs_hlist[kind], tramp_hlist)
+			*progs++ = aux->prog;
+	}
+	return tprogs;
+}
 
 static int bpf_trampoline_update(struct bpf_trampoline *tr)
 {
 	void *old_image = tr->image + ((tr->selector + 1) & 1) * PAGE_SIZE/2;
 	void *new_image = tr->image + (tr->selector & 1) * PAGE_SIZE/2;
-	struct bpf_prog *progs_to_run[BPF_MAX_TRAMP_PROGS];
-	int fentry_cnt = tr->progs_cnt[BPF_TRAMP_FENTRY];
-	int fexit_cnt = tr->progs_cnt[BPF_TRAMP_FEXIT];
-	struct bpf_prog **progs, **fentry, **fexit;
+	struct bpf_tramp_progs *tprogs;
 	u32 flags = BPF_TRAMP_F_RESTORE_REGS;
-	struct bpf_prog_aux *aux;
-	int err;
+	int err, total;
 
-	if (fentry_cnt + fexit_cnt == 0) {
-		err = bpf_arch_text_poke(tr->func.addr, BPF_MOD_CALL_TO_NOP,
-					 old_image, NULL);
+	tprogs = bpf_trampoline_get_progs(tr, &total);
+	if (IS_ERR(tprogs))
+		return PTR_ERR(tprogs);
+
+	if (total == 0) {
+		err = unregister_fentry(tr, old_image);
 		tr->selector = 0;
 		goto out;
 	}
 
-	/* populate fentry progs */
-	fentry = progs = progs_to_run;
-	hlist_for_each_entry(aux, &tr->progs_hlist[BPF_TRAMP_FENTRY], tramp_hlist)
-		*progs++ = aux->prog;
-
-	/* populate fexit progs */
-	fexit = progs;
-	hlist_for_each_entry(aux, &tr->progs_hlist[BPF_TRAMP_FEXIT], tramp_hlist)
-		*progs++ = aux->prog;
-
-	if (fexit_cnt)
+	if (tprogs[BPF_TRAMP_FEXIT].nr_progs ||
+	    tprogs[BPF_TRAMP_MODIFY_RETURN].nr_progs)
 		flags = BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_SKIP_FRAME;
 
-	err = arch_prepare_bpf_trampoline(new_image, &tr->func.model, flags,
-					  fentry, fentry_cnt,
-					  fexit, fexit_cnt,
+	/* Though the second half of trampoline page is unused a task could be
+	 * preempted in the middle of the first half of trampoline and two
+	 * updates to trampoline would change the code from underneath the
+	 * preempted task. Hence wait for tasks to voluntarily schedule or go
+	 * to userspace.
+	 */
+
+	synchronize_rcu_tasks();
+
+	err = arch_prepare_bpf_trampoline(new_image, new_image + PAGE_SIZE / 2,
+					  &tr->func.model, flags, tprogs,
 					  tr->func.addr);
-	if (err)
+	if (err < 0)
 		goto out;
 
 	if (tr->selector)
 		/* progs already running at this address */
-		err = bpf_arch_text_poke(tr->func.addr, BPF_MOD_CALL_TO_CALL,
-					 old_image, new_image);
+		err = modify_fentry(tr, old_image, new_image);
 	else
 		/* first time registering */
-		err = bpf_arch_text_poke(tr->func.addr, BPF_MOD_NOP_TO_CALL,
-					 NULL, new_image);
+		err = register_fentry(tr, new_image);
 	if (err)
 		goto out;
 	tr->selector++;
 out:
+	kfree(tprogs);
 	return err;
 }
 
@@ -129,6 +238,8 @@ static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(enum bpf_attach_type t)
 	switch (t) {
 	case BPF_TRACE_FENTRY:
 		return BPF_TRAMP_FENTRY;
+	case BPF_MODIFY_RETURN:
+		return BPF_TRAMP_MODIFY_RETURN;
 	case BPF_TRACE_FEXIT:
 		return BPF_TRAMP_FEXIT;
 	default:
@@ -141,7 +252,7 @@ int bpf_trampoline_link_prog(struct bpf_prog *prog)
 	enum bpf_tramp_prog_type kind;
 	struct bpf_trampoline *tr;
 	int err = 0;
-	int cnt;
+	int cnt = 0, i;
 
 	tr = prog->aux->trampoline;
 	kind = bpf_attach_type_to_tramp(prog->expected_attach_type);
@@ -153,7 +264,10 @@ int bpf_trampoline_link_prog(struct bpf_prog *prog)
 		err = -EBUSY;
 		goto out;
 	}
-	cnt = tr->progs_cnt[BPF_TRAMP_FENTRY] + tr->progs_cnt[BPF_TRAMP_FEXIT];
+
+	for (i = 0; i < BPF_TRAMP_MAX; i++)
+		cnt += tr->progs_cnt[i];
+
 	if (kind == BPF_TRAMP_REPLACE) {
 		/* Cannot attach extension if fentry/fexit are in use. */
 		if (cnt) {
@@ -213,16 +327,20 @@ out:
 
 void bpf_trampoline_put(struct bpf_trampoline *tr)
 {
+	int i;
+
 	if (!tr)
 		return;
 	mutex_lock(&trampoline_mutex);
 	if (!refcount_dec_and_test(&tr->refcnt))
 		goto out;
 	WARN_ON_ONCE(mutex_is_locked(&tr->mutex));
-	if (WARN_ON_ONCE(!hlist_empty(&tr->progs_hlist[BPF_TRAMP_FENTRY])))
-		goto out;
-	if (WARN_ON_ONCE(!hlist_empty(&tr->progs_hlist[BPF_TRAMP_FEXIT])))
-		goto out;
+	for (i = 0; i < BPF_TRAMP_MAX; i++)
+		if (WARN_ON_ONCE(!hlist_empty(&tr->progs_hlist[i])))
+			goto out;
+	bpf_image_ksym_del(&tr->ksym);
+	/* wait for tasks to get out of trampoline before freeing it */
+	synchronize_rcu_tasks();
 	bpf_jit_free_exec(tr->image);
 	hlist_del(&tr->hlist);
 	kfree(tr);
@@ -230,8 +348,9 @@ out:
 	mutex_unlock(&trampoline_mutex);
 }
 
-/* The logic is similar to BPF_PROG_RUN, but with explicit rcu and preempt that
- * are needed for trampoline. The macro is split into
+/* The logic is similar to BPF_PROG_RUN, but with an explicit
+ * rcu_read_lock() and preempt_disable() which are required
+ * for the trampoline on this non-RT 4.4 kernel. The macro is split into
  * call _bpf_prog_enter
  * call prog->bpf_func
  * call __bpf_prog_exit
@@ -269,9 +388,9 @@ void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start)
 }
 
 int __weak
-arch_prepare_bpf_trampoline(void *image, struct btf_func_model *m, u32 flags,
-			    struct bpf_prog **fentry_progs, int fentry_cnt,
-			    struct bpf_prog **fexit_progs, int fexit_cnt,
+arch_prepare_bpf_trampoline(void *image, void *image_end,
+			    const struct btf_func_model *m, u32 flags,
+			    struct bpf_tramp_progs *tprogs,
 			    void *orig_call)
 {
 	return -ENOTSUPP;
