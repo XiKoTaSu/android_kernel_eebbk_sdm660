@@ -336,6 +336,7 @@ struct ubuf_info {
  * the end of the header data, ie. at skb->end.
  */
 struct skb_shared_info {
+	__u8		meta_len;
 	unsigned char	nr_frags;
 	__u8		tx_flags;
 	unsigned short	gso_size;
@@ -3177,6 +3178,11 @@ static inline ktime_t net_timedelta(ktime_t t)
 static inline ktime_t net_invalid_timestamp(void)
 {
 	return ktime_set(0, 0);
+}
+
+static inline u8 skb_metadata_len(const struct sk_buff *skb)
+{
+	return skb_shinfo(skb)->meta_len;
 }
 
 struct sk_buff *skb_clone_sk(struct sk_buff *skb);

@@ -21,12 +21,15 @@
 #include <linux/proc_fs.h>
 #include <linux/sched.h>	/* for cond_resched */
 #include <linux/mm.h>
+#include <linux/capability.h>
 #include <linux/ctype.h>
 #include <linux/slab.h>
 #include <linux/filter.h>
 #include <linux/compiler.h>
 
 #include <asm/sections.h>
+
+extern int kptr_restrict;
 
 #ifdef CONFIG_KALLSYMS_ALL
 #define all_var 1
@@ -642,3 +645,37 @@ static int __init kallsyms_init(void)
 	return 0;
 }
 device_initcall(kallsyms_init);
+
+static inline int kallsyms_for_perf(void)
+{
+#ifdef CONFIG_PERF_EVENTS
+	extern int sysctl_perf_event_paranoid;
+	if (sysctl_perf_event_paranoid <= 1)
+		return 1;
+#endif
+	return 0;
+}
+
+/*
+ * We show kallsyms information even to normal users if we've enabled
+ * kernel profiling and are explicitly not paranoid (so kptr_restrict
+ * is clear, and sysctl_perf_event_paranoid isn't set).
+ *
+ * Otherwise, require CAP_SYSLOG (assuming kptr_restrict isn't set to
+ * block even that).
+ */
+int kallsyms_show_value(void)
+{
+	switch (kptr_restrict) {
+	case 0:
+		if (kallsyms_for_perf())
+			return 1;
+	/* fallthrough */
+	case 1:
+		if (has_capability_noaudit(current, CAP_SYSLOG))
+			return 1;
+	/* fallthrough */
+	default:
+		return 0;
+	}
+}
