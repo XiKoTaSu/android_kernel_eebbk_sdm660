@@ -2338,3 +2338,9 @@ int sysctl_max_threads(struct ctl_table *table, int write,
 
 	return 0;
 }
+
+
+void *task_stack_page(const struct task_struct *task)
+{
+	return task->stack;
+}
