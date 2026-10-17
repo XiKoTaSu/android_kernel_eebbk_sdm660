@@ -12,13 +12,14 @@
 struct bpfilter_umh_ops bpfilter_ops;
 EXPORT_SYMBOL_GPL(bpfilter_ops);
 
-static void bpfilter_umh_cleanup(struct umh_info *info)
+static void bpfilter_umh_cleanup(struct umd_info *info)
 {
 	mutex_lock(&bpfilter_ops.lock);
 	bpfilter_ops.stop = true;
 	fput(info->pipe_to_umh);
 	fput(info->pipe_from_umh);
-	info->pid = 0;
+	put_pid(info->tgid);
+	info->tgid = NULL;
 	mutex_unlock(&bpfilter_ops.lock);
 }
 
