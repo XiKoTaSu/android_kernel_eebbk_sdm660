@@ -80,6 +80,8 @@ ENTRY(shmobile_smp_sleep)
 	b	shmobile_smp_boot
 ENDPROC(shmobile_smp_sleep)
 
+
+	.align	2
 	.globl	shmobile_smp_mpidr
 shmobile_smp_mpidr:
 1:	.space	NR_CPUS * 4

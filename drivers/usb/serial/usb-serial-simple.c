@@ -99,6 +99,12 @@ DEVICE(motorola_tetra, MOTOROLA_TETRA_IDS);
 	{ USB_DEVICE(0x09d7, 0x0100) }	/* NovAtel FlexPack GPS */
 DEVICE_N(novatel_gps, NOVATEL_IDS, 3);
 
+
+/* OWON electronic test and measurement equipment driver */
+#define OWON_IDS()			\
+	{ USB_DEVICE(0x5345, 0x1234) } /* HDS200 oscilloscopes and others */
+DEVICE(owon, OWON_IDS);
+
 /* HP4x (48/49) Generic Serial driver */
 #define HP4X_IDS()			\
 	{ USB_DEVICE(0x03f0, 0x0121) }
@@ -127,6 +133,7 @@ static struct usb_serial_driver * const serial_drivers[] = {
 	&moto_modem_device,
 	&motorola_tetra_device,
 	&novatel_gps_device,
+	&owon_device,
 	&hp4x_device,
 	&suunto_device,
 	&siemens_mpi_device,
@@ -144,6 +151,7 @@ static const struct usb_device_id id_table[] = {
 	MOTO_IDS(),
 	MOTOROLA_TETRA_IDS(),
 	NOVATEL_IDS(),
+	OWON_IDS(),
 	HP4X_IDS(),
 	SUUNTO_IDS(),
 	SIEMENS_IDS(),
