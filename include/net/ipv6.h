@@ -993,4 +993,9 @@ int ipv6_sock_mc_join(struct sock *sk, int ifindex,
 		      const struct in6_addr *addr);
 int ipv6_sock_mc_drop(struct sock *sk, int ifindex,
 		      const struct in6_addr *addr);
+
+static inline int inet6_sdif(struct sk_buff *skb)
+{
+	return 0;
+}
 #endif /* _NET_IPV6_H */
