@@ -3135,88 +3135,6 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static bool bpf_map_is_rdonly(const struct bpf_map *map)
-{
-	return (map->map_flags & BPF_F_RDONLY_PROG) && map->frozen;
-}
-
-static int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val)
-{
-	void *ptr;
-	u64 addr;
-	int err;
-
-	err = map->ops->map_direct_value_addr(map, &addr, off);
-	if (err)
-		return err;
-	ptr = (void *)addr + off;
-
-	switch (size) {
-	case sizeof(u8):
-		*val = (u64)*(u8 *)ptr;
-		break;
-	case sizeof(u16):
-		*val = (u64)*(u16 *)ptr;
-		break;
-	case sizeof(u32):
-		*val = (u64)*(u32 *)ptr;
-		break;
-	case sizeof(u64):
-		*val = *(u64 *)ptr;
-		break;
-	default:
-		return -EINVAL;
-	}
-	return 0;
-}
-
-static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
-				   struct bpf_reg_state *regs,
-				   int regno, int off, int size,
-				   enum bpf_access_type atype,
-				   int value_regno)
-{
-	struct bpf_reg_state *reg = regs + regno;
-	const struct btf_type *t = btf_type_by_id(btf_vmlinux, reg->btf_id);
-	const char *tname = btf_name_by_offset(btf_vmlinux, t->name_off);
-	u32 btf_id;
-	int ret;
-
-	if (atype != BPF_READ) {
-		verbose(env, "only read is supported\n");
-		return -EACCES;
-	}
-
-	if (off < 0) {
-		verbose(env,
-			"R%d is ptr_%s invalid negative access: off=%d\n",
-			regno, tname, off);
-		return -EACCES;
-	}
-	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
-		char tn_buf[48];
-
-		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
-		verbose(env,
-			"R%d is ptr_%s invalid variable offset: off=%d, var_off=%s\n",
-			regno, tname, off, tn_buf);
-		return -EACCES;
-	}
-
-	ret = btf_struct_access(&env->log, t, off, size, atype, &btf_id);
-	if (ret < 0)
-		return ret;
-
-	if (ret == SCALAR_VALUE) {
-		mark_reg_unknown(env, regs, value_regno);
-		return 0;
-	}
-	mark_reg_known_zero(env, regs, value_regno);
-	regs[value_regno].type = PTR_TO_BTF_ID;
-	regs[value_regno].btf_id = btf_id;
-	return 0;
-}
-
 /* check whether memory at (regno + off) is accessible for t = (read | write)
  * if t==write, value_regno is a register which value is stored into memory
  * if t==read, value_regno is a register which will receive the value from memory
@@ -3275,17 +3193,6 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 				mark_reg_unknown(env, regs, value_regno);
 			}
 		}
-	} else if (reg->type == PTR_TO_MEM) {
-		if (t == BPF_WRITE && value_regno >= 0 &&
-		    is_pointer_value(env, value_regno)) {
-			verbose(env, "R%d leaks addr into mem\n", value_regno);
-			return -EACCES;
-		}
-		err = check_mem_region_access(env, regno, off, size,
-					      reg->mem_size, false);
-		if (!err && t == BPF_READ && value_regno >= 0)
-			mark_reg_unknown(env, regs, value_regno);
-
 	} else if (reg->type == PTR_TO_MEM) {
 		if (t == BPF_WRITE && value_regno >= 0 &&
 		    is_pointer_value(env, value_regno)) {
@@ -3659,12 +3566,6 @@ static bool arg_type_is_mem_size(enum bpf_arg_type type)
 	       type == ARG_CONST_SIZE_OR_ZERO;
 }
 
-static bool arg_type_is_alloc_mem_ptr(enum bpf_arg_type type)
-{
-	return type == ARG_PTR_TO_ALLOC_MEM ||
-	       type == ARG_PTR_TO_ALLOC_MEM_OR_NULL;
-}
-
 static bool arg_type_is_alloc_size(enum bpf_arg_type type)
 {
 	return type == ARG_CONST_ALLOC_SIZE_OR_ZERO;
@@ -4032,8 +3933,6 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 	case BPF_MAP_TYPE_RINGBUF:
 		if (func_id != BPF_FUNC_ringbuf_output &&
 		    func_id != BPF_FUNC_ringbuf_reserve &&
-		    func_id != BPF_FUNC_ringbuf_submit &&
-		    func_id != BPF_FUNC_ringbuf_discard &&
 		    func_id != BPF_FUNC_ringbuf_query)
 			goto error;
 		break;
@@ -4521,10 +4420,6 @@ static void do_refine_retval_range(struct bpf_reg_state *regs, int ret_type,
 	    (func_id != BPF_FUNC_get_stack &&
 	     func_id != BPF_FUNC_probe_read_str))
 		return;
-
-	/* Error case where ret is in interval [S32MIN, -1]. */
-	ret_reg->smin_value = S32_MIN;
-	ret_reg->smax_value = -1;
 
 	ret_reg->smax_value = meta->msize_max_value;
 	ret_reg->s32_max_value = meta->msize_max_value;
@@ -5906,19 +5801,6 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		else
 			scalar_min_max_arsh(dst_reg, &src_reg);
 		break;
-	case BPF_ARSH:
-		if (umax_val >= insn_bitness) {
-			/* Shifts greater than 31 or 63 are undefined.
-			 * This includes shifts by a negative number.
-			 */
-			mark_reg_unknown(env, regs, insn->dst_reg);
-			break;
-		}
-		if (alu32)
-			scalar32_min_max_arsh(dst_reg, &src_reg);
-		else
-			scalar_min_max_arsh(dst_reg, &src_reg);
-		break;
 	default:
 		mark_reg_unknown(env, regs, insn->dst_reg);
 		break;
@@ -6440,11 +6322,6 @@ static int is_branch_taken(struct bpf_reg_state *reg, u64 val, u8 opcode,
 {
 	if (__is_pointer_value(false, reg))
 		return -1;
-
-	if (is_jmp32)
-		return is_branch32_taken(reg, val, opcode);
-	return is_branch64_taken(reg, val, opcode);
-}
 
 	if (is_jmp32)
 		return is_branch32_taken(reg, val, opcode);
@@ -10293,7 +10170,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 			subprog);
 
 	regs = state->frame[state->curframe]->regs;
-	if (subprog) {
+	if (subprog || env->prog->type == BPF_PROG_TYPE_EXT) {
 		ret = btf_prepare_func_args(env, subprog, regs);
 		if (ret)
 			goto out;
@@ -10565,21 +10442,6 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		prog->aux->attach_func_name = tname;
 		prog->aux->attach_func_proto = t;
 		prog->aux->attach_btf_trace = true;
-		return 0;
-	case BPF_TRACE_ITER:
-		if (!btf_type_is_func(t)) {
-			verbose(env, "attach_btf_id %u is not a function\n",
-				btf_id);
-			return -EINVAL;
-		}
-		t = btf_type_by_id(btf_vmlinux, t->type);
-		if (!btf_type_is_func_proto(t))
-			return -EINVAL;
-		prog->aux->attach_func_name = tname;
-		prog->aux->attach_func_proto = t;
-		if (!bpf_iter_prog_supported(prog))
-			return -EINVAL;
-		prog->aux->btf_id_or_null_non0_off = true;
 		return 0;
 	default:
 		if (!prog_extension)
