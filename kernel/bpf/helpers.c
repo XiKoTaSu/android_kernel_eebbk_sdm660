@@ -18,6 +18,10 @@
 #include <linux/sched.h>
 #include <linux/uidgid.h>
 #include <linux/filter.h>
+#include <linux/ctype.h>
+#include <linux/bpf-cgroup.h>
+
+#include "../../lib/kstrtox.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return
@@ -303,7 +307,7 @@ BPF_CALL_0(bpf_get_current_cgroup_id)
 {
 	struct cgroup *cgrp = task_dfl_cgroup(current);
 
-	return cgrp->kn->id.id;
+	return cgrp->kn->ino;
 }
 
 const struct bpf_func_proto bpf_get_current_cgroup_id_proto = {
