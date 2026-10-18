@@ -279,6 +279,7 @@ struct tcp_sock {
 	u64	delivered_mstamp; /* time we reached "delivered" */
 	u32	rate_delivered;    /* saved rate sample: packets delivered */
 	u32	rate_interval_us;  /* saved rate sample: time elapsed */
+	u64	tcp_mstamp;	/* most recent packet received/sent */
 
 /* Sock_ops bpf program related variables */
 #ifdef CONFIG_BPF

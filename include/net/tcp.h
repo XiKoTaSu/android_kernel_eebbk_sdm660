@@ -762,9 +762,33 @@ void tcp_send_window_probe(struct sock *sk);
 #define tcp_time_stamp		((__u32)(jiffies))
 #define tcp_jiffies32		((u32)jiffies)
 
+static inline u32 tcp_time_stamp_raw(void)
+{
+	return div_u64(tcp_clock_ns(), NSEC_PER_SEC / TCP_TS_HZ);
+}
+
+static inline void tcp_mstamp_refresh(struct tcp_sock *tp)
+{
+	u64 val = tcp_clock_us();
+
+	if (val > tp->tcp_mstamp)
+		tp->tcp_mstamp = val;
+}
+
+static inline u32 tcp_stamp_us_delta(u64 t1, u64 t0)
+{
+	return max_t(s64, t1 - t0, 0);
+}
+
 static inline u32 tcp_skb_timestamp(const struct sk_buff *skb)
 {
 	return skb->skb_mstamp.stamp_jiffies;
+}
+
+/* provide the departure time in us unit */
+static inline u64 tcp_skb_timestamp_us(const struct sk_buff *skb)
+{
+	return (u64)skb->skb_mstamp.stamp_jiffies * USEC_PER_SEC / HZ;
 }
 
 
@@ -1940,6 +1964,16 @@ static inline int tcp_inq(struct sock *sk)
 	}
 
 	return answ;
+}
+
+static inline void tcp_segs_in(struct tcp_sock *tp, const struct sk_buff *skb)
+{
+	u16 segs_in;
+
+	segs_in = max_t(u16, 1, skb_shinfo(skb)->gso_segs);
+	tp->segs_in += segs_in;
+	if (skb->len > tcp_hdrlen(skb))
+		tp->data_segs_in += segs_in;
 }
 
 int tcp_peek_len(struct socket *sock);

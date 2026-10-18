@@ -433,6 +433,7 @@ struct sock {
 #define SK_PROTOCOL_MAX U8_MAX
 	kmemcheck_bitfield_end(flags);
 	u8			sk_shutdown;
+	unsigned long		sk_tsq_flags;
 	int			sk_wmem_queued;
 	gfp_t			sk_allocation;
 	u32			sk_pacing_rate; /* bytes per second */
