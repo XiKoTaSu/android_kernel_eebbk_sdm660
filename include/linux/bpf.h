@@ -525,6 +525,11 @@ struct bpf_trampoline {
 		void *addr;
 		bool ftrace_managed;
 	} func;
+	/* if !NULL this is BPF_PROG_TYPE_EXT program that extends another BPF
+	 * program by replacing one of its functions. func.addr is the address
+	 * of the function it replaced.
+	 */
+	struct bpf_prog *extension_prog;
 	/* list of BPF programs using this trampoline */
 	struct hlist_head progs_hlist[BPF_TRAMP_MAX];
 	/* Number of attached programs. A counter per kind. */
