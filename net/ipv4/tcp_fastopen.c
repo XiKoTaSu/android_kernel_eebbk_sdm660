@@ -305,3 +305,16 @@ fastopen:
 	*foc = valid_foc;
 	return NULL;
 }
+
+bool tcp_fastopen_defer_connect(struct sock *sk, int *err)
+{
+	return false;
+}
+
+void tcp_fastopen_destroy_cipher(struct sock *sk)
+{
+}
+
+void tcp_fastopen_active_disable_ofo_check(struct sock *sk)
+{
+}
