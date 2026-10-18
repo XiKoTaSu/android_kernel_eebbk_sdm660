@@ -440,7 +440,7 @@ static void tcp_tx_timestamp(struct sock *sk, struct sk_buff *skb)
 	if (sk->sk_tsflags) {
 		struct skb_shared_info *shinfo = skb_shinfo(skb);
 
-		sock_tx_timestamp(sk, &shinfo->tx_flags);
+		sock_tx_timestamp(sk, sk->sk_tsflags, &shinfo->tx_flags);
 		if (shinfo->tx_flags & SKBTX_ANY_TSTAMP)
 			shinfo->tskey = TCP_SKB_CB(skb)->seq + skb->len - 1;
 	}

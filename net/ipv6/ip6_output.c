@@ -1362,7 +1362,7 @@ emsgsize:
 		csummode = CHECKSUM_PARTIAL;
 
 	if (sk->sk_type == SOCK_DGRAM || sk->sk_type == SOCK_RAW) {
-		sock_tx_timestamp(sk, &tx_flags);
+		sock_tx_timestamp(sk, sk->sk_tsflags, &tx_flags);
 		if (tx_flags & SKBTX_ANY_SW_TSTAMP &&
 		    sk->sk_tsflags & SOF_TIMESTAMPING_OPT_ID)
 			tskey = sk->sk_tskey++;
