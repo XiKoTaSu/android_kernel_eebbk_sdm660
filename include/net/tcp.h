@@ -2071,4 +2071,9 @@ int tcp_set_ulp(struct sock *sk, const char *name);
 void tcp_get_available_ulp(char *buf, size_t len);
 void tcp_cleanup_ulp(struct sock *sk);
 
+
+static inline bool inet_exact_dif_match(struct net *net, struct sk_buff *skb)
+{
+	return false;
+}
 #endif	/* _TCP_H */
