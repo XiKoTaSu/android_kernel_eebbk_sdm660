@@ -762,6 +762,18 @@ void tcp_send_window_probe(struct sock *sk);
 #define tcp_time_stamp		((__u32)(jiffies))
 #define tcp_jiffies32		((u32)jiffies)
 
+#define TCP_TS_HZ	1000
+
+static inline u64 tcp_clock_ns(void)
+{
+	return local_clock();
+}
+
+static inline u64 tcp_clock_us(void)
+{
+	return div_u64(tcp_clock_ns(), NSEC_PER_USEC);
+}
+
 static inline u32 tcp_time_stamp_raw(void)
 {
 	return div_u64(tcp_clock_ns(), NSEC_PER_SEC / TCP_TS_HZ);
