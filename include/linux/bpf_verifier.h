@@ -9,6 +9,7 @@
 
 #include <linux/bpf.h> /* for enum bpf_reg_type */
 #include <linux/filter.h> /* for MAX_BPF_STACK */
+#include <linux/tnum.h>
 
 /* Maximum variable offset umax_value permitted when resolving memory accesses.
  * In practice this is far bigger than any realistic pointer offset; this limit
@@ -43,16 +44,11 @@ enum bpf_reg_liveness {
 };
 
 struct bpf_reg_state {
+	/* Ordering of fields matters.  See states_equal() */
 	enum bpf_reg_type type;
 	union {
-		/* valid when type == CONST_IMM | PTR_TO_STACK | UNKNOWN_VALUE */
-		s64 imm;
-
-		/* valid when type == PTR_TO_PACKET* */
-		struct {
-			u16 off;
-			u16 range;
-		};
+		/* valid when type == PTR_TO_PACKET */
+		u16 range;
 
 		/* valid when type == CONST_PTR_TO_MAP | PTR_TO_MAP_VALUE |
 		 *   PTR_TO_MAP_VALUE_OR_NULL
@@ -78,9 +74,57 @@ struct bpf_reg_state {
 	 * same reference to the socket, to determine proper reference freeing.
 	 */
 	u32 id;
+	/* PTR_TO_SOCKET and PTR_TO_TCP_SOCK could be a ptr returned
+	 * from a pointer-cast helper, bpf_sk_fullsock() and
+	 * bpf_tcp_sock().
+	 *
+	 * Consider the following where "sk" is a reference counted
+	 * pointer returned from "sk = bpf_sk_lookup_tcp();":
+	 *
+	 * 1: sk = bpf_sk_lookup_tcp();
+	 * 2: if (!sk) { return 0; }
+	 * 3: fullsock = bpf_sk_fullsock(sk);
+	 * 4: if (!fullsock) { bpf_sk_release(sk); return 0; }
+	 * 5: tp = bpf_tcp_sock(fullsock);
+	 * 6: if (!tp) { bpf_sk_release(sk); return 0; }
+	 * 7: bpf_sk_release(sk);
+	 * 8: snd_cwnd = tp->snd_cwnd;  // verifier will complain
+	 *
+	 * After bpf_sk_release(sk) at line 7, both "fullsock" ptr and
+	 * "tp" ptr should be invalidated also.  In order to do that,
+	 * the reg holding "fullsock" and "sk" need to remember
+	 * the original refcounted ptr id (i.e. sk_reg->id) in ref_obj_id
+	 * such that the verifier can reset all regs which have
+	 * ref_obj_id matching the sk_reg->id.
+	 *
+	 * sk_reg->ref_obj_id is set to sk_reg->id at line 1.
+	 * sk_reg->id will stay as NULL-marking purpose only.
+	 * After NULL-marking is done, sk_reg->id can be reset to 0.
+	 *
+	 * After "fullsock = bpf_sk_fullsock(sk);" at line 3,
+	 * fullsock_reg->ref_obj_id is set to sk_reg->ref_obj_id.
+	 *
+	 * After "tp = bpf_tcp_sock(fullsock);" at line 5,
+	 * tp_reg->ref_obj_id is set to fullsock_reg->ref_obj_id
+	 * which is the same as sk_reg->ref_obj_id.
+	 *
+	 * From the verifier perspective, if sk, fullsock and tp
+	 * are not NULL, they are the same ptr with different
+	 * reg->type.  In particular, bpf_sk_release(tp) is also
+	 * allowed and has the same effect as bpf_sk_release(sk).
+	 */
+	u32 ref_obj_id;
+	/* For scalar types (SCALAR_VALUE), this represents our knowledge of
+	 * the actual value.
+	 * For pointer types, this represents the variable part of the offset
+	 * from the pointed-to object, and is shared with all bpf_reg_states
+	 * with the same id as us.
+	 */
+	struct tnum var_off;
 	/* Used to determine if any memory access using this register will
-	 * result in a bad access. These two fields must be last.
-	 * See states_equal()
+	 * result in a bad access.
+	 * These refer to the same value as var_off, not necessarily the actual
+	 * contents of the register.
 	 */
 	s64 smin_value; /* minimum possible (s64)value */
 	s64 smax_value; /* maximum possible (s64)value */
@@ -112,10 +156,27 @@ struct bpf_reg_state {
 enum bpf_stack_slot_type {
 	STACK_INVALID,    /* nothing was stored in this stack slot */
 	STACK_SPILL,      /* register spilled into stack */
-	STACK_MISC	  /* BPF program wrote some data into this slot */
+	STACK_MISC,	  /* BPF program wrote some data into this slot */
+	STACK_ZERO,	  /* BPF program wrote constant zero */
 };
 
 #define BPF_REG_SIZE 8	/* size of eBPF register in bytes */
+
+struct bpf_stack_state {
+	struct bpf_reg_state spilled_ptr;
+	u8 slot_type[BPF_REG_SIZE];
+};
+
+struct bpf_reference_state {
+	/* Track each reference created with a unique id, even if the same
+	 * instruction creates the reference multiple times (eg, via CALL).
+	 */
+	int id;
+	/* Instruction where the allocation of this reference occurred. This
+	 * is used purely to inform the user of a reference leak.
+	 */
+	int insn_idx;
+};
 
 /* state of the program:
  * type of all registers and stack info
@@ -221,12 +282,31 @@ struct bpf_verifier_state {
 	u32 jmp_history_cnt;
 };
 
+#define bpf_get_spilled_reg(slot, frame)				\
+	(((slot < frame->allocated_stack / BPF_REG_SIZE) &&		\
+	  (frame->stack[slot].slot_type[0] == STACK_SPILL))		\
+	 ? &frame->stack[slot].spilled_ptr : NULL)
+
+/* Iterate over 'frame', setting 'reg' to either NULL or a spilled register. */
+#define bpf_for_each_spilled_reg(iter, frame, reg)			\
+	for (iter = 0, reg = bpf_get_spilled_reg(iter, frame);		\
+	     iter < frame->allocated_stack / BPF_REG_SIZE;		\
+	     iter++, reg = bpf_get_spilled_reg(iter, frame))
+
 /* linked list of verifier states used to prune search */
 struct bpf_verifier_state_list {
 	struct bpf_verifier_state state;
 	struct bpf_verifier_state_list *next;
 	int miss_cnt, hit_cnt;
 };
+
+/* Possible states for alu_state member. */
+#define BPF_ALU_SANITIZE_SRC		1U
+#define BPF_ALU_SANITIZE_DST		2U
+#define BPF_ALU_NEG_VALUE		(1U << 2)
+#define BPF_ALU_NON_POINTER		(1U << 3)
+#define BPF_ALU_SANITIZE		(BPF_ALU_SANITIZE_SRC | \
+					 BPF_ALU_SANITIZE_DST)
 
 struct bpf_insn_aux_data {
 	union {
@@ -281,8 +361,7 @@ static inline bool bpf_verifier_log_needed(const struct bpf_verifier_log *log)
 		log->level == BPF_LOG_KERNEL;
 }
 
-__printf(2, 3) void bpf_verifier_log_write(struct bpf_verifier_log *log,
-					   const char *fmt, ...);
+#define BPF_MAX_SUBPROGS 256
 
 struct bpf_subprog_info {
 	/* 'start' has to be the first field otherwise find_subprog() won't work */
@@ -296,7 +375,10 @@ struct bpf_subprog_info {
  * one verifier_env per bpf_check() call
  */
 struct bpf_verifier_env {
+	u32 insn_idx;
+	u32 prev_insn_idx;
 	struct bpf_prog *prog;		/* eBPF program being verified */
+	const struct bpf_verifier_ops *ops;
 	struct bpf_verifier_stack_elem *head; /* stack of verifier states to be processed */
 	int stack_size;			/* number of states to be processed */
 	bool strict_alignment;		/* perform strict pointer alignment checks */
@@ -309,7 +391,6 @@ struct bpf_verifier_env {
 	u32 id_gen;			/* used to generate unique reg IDs */
 	bool allow_ptr_leaks;
 	bool seen_direct_write;
-	bool varlen_map_value_access;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
 	const struct bpf_line_info *prev_linfo;
 	struct bpf_verifier_log log;
