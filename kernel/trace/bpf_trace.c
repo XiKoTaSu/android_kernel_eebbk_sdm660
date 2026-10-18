@@ -677,7 +677,7 @@ get_map_perf_counter(struct bpf_map *map, u64 flags,
 	if (!ee)
 		return -ENOENT;
 
-	err = perf_event_read_local(ee->event, &value);
+	err = perf_event_read_local(ee->event, &value, NULL, NULL);
 	/*
 	 * this api is ugly since we miss [-22..-2] range of valid
 	 * counter values, but that's uapi
