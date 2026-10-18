@@ -514,7 +514,7 @@ sticky_done:
 		msg.msg_control = (void *)(opt+1);
 
 		retv = ip6_datagram_send_ctl(net, sk, &msg, &fl6, opt, &junk,
-					     &junk, &junk);
+					     &junk, &junk, NULL);
 		if (retv)
 			goto done;
 update:
