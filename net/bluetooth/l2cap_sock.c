@@ -42,6 +42,7 @@ static struct bt_sock_list l2cap_sk_list = {
 
 static const struct proto_ops l2cap_sock_ops;
 static void l2cap_sock_init(struct sock *sk, struct sock *parent);
+static void l2cap_sock_cleanup_listen(struct sock *parent);
 static struct sock *l2cap_sock_alloc(struct net *net, struct socket *sock,
 				     int proto, gfp_t prio, int kern);
 

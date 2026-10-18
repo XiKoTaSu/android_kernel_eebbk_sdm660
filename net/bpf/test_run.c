@@ -330,6 +330,7 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 {
 	u32 size = kattr->test.data_size_in;
 	u32 repeat = kattr->test.repeat;
+	struct netdev_rx_queue *rxqueue;
 	struct xdp_buff xdp = {};
 	u32 retval, duration;
 	void *data;
