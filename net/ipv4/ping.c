@@ -751,7 +751,7 @@ static int ping_v4_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	ipc.ttl = 0;
 	ipc.tos = -1;
 
-	sock_tx_timestamp(sk, &ipc.tx_flags);
+	sock_tx_timestamp(sk, sk->sk_tsflags, &ipc.tx_flags);
 
 	if (msg->msg_controllen) {
 		err = ip_cmsg_send(sock_net(sk), msg, &ipc, false);
