@@ -530,7 +530,7 @@ static void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info)
 			      len + sizeof(struct icmp6hdr),
 			      sizeof(struct icmp6hdr), hlimit,
 			      np->tclass, NULL, &fl6, (struct rt6_info *)dst,
-			      MSG_DONTWAIT, np->dontfrag);
+			      MSG_DONTWAIT, np->dontfrag, NULL);
 	if (err) {
 		ICMP6_INC_STATS(net, idev, ICMP6_MIB_OUTERRORS);
 		ip6_flush_pending_frames(sk);
@@ -621,7 +621,7 @@ static void icmpv6_echo_reply(struct sk_buff *skb)
 	err = ip6_append_data(sk, icmpv6_getfrag, &msg, skb->len + sizeof(struct icmp6hdr),
 				sizeof(struct icmp6hdr), hlimit, tclass, NULL, &fl6,
 				(struct rt6_info *)dst, MSG_DONTWAIT,
-				np->dontfrag);
+				np->dontfrag, NULL);
 
 	if (err) {
 		ICMP6_INC_STATS_BH(net, idev, ICMP6_MIB_OUTERRORS);

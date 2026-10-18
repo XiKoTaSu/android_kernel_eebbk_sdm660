@@ -58,6 +58,7 @@ static inline unsigned int ip_hdrlen(const struct sk_buff *skb)
 }
 
 struct ipcm_cookie {
+	struct sockcm_cookie	sockc;
 	__be32			addr;
 	int			oif;
 	struct ip_options_rcu	*opt;
