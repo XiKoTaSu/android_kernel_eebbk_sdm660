@@ -11,10 +11,14 @@
 #include <linux/kernel.h>
 #include <linux/atomic.h>
 #include <linux/cgroup.h>
+#include <linux/filter.h>
 #include <linux/slab.h>
+#include <linux/sysctl.h>
+#include <linux/string.h>
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup.h>
 #include <net/sock.h>
+#include <net/bpf_sk_storage.h>
 
 DEFINE_STATIC_KEY_FALSE(cgroup_bpf_enabled_key);
 EXPORT_SYMBOL(cgroup_bpf_enabled_key);
@@ -88,17 +92,12 @@ static void bpf_cgroup_link_auto_detach(struct bpf_cgroup_link *link)
 	link->cgroup = NULL;
 }
 
-void cgroup_bpf_get(struct cgroup *cgrp)
-{
-	/* Local tree keeps cgroup refcounting on sock_cgroup_data via
-	 * cgroup_get/cgroup_put; bpf prog list is released only at cgroup
-	 * teardown, so a get-side callback is not needed here.
-	 */
-}
-
- * @cgrp: the cgroup to modify
+/**
+ * cgroup_bpf_release() - put references of all bpf programs and
+ *                        release all cgroup bpf data
+ * @work: work structure embedded into the cgroup to modify
  */
-void cgroup_bpf_put(struct cgroup *cgrp)
+static void cgroup_bpf_release(struct work_struct *work)
 {
 	struct cgroup *cgrp = container_of(work, struct cgroup,
 					   bpf.release_work);
@@ -121,6 +120,22 @@ void cgroup_bpf_put(struct cgroup *cgrp)
 		}
 		bpf_prog_array_free(cgrp->bpf.effective[type]);
 	}
+
+	percpu_ref_exit(&cgrp->bpf.refcnt);
+	cgroup_put(cgrp);
+}
+
+/**
+ * cgroup_bpf_release_fn() - callback used to schedule releasing
+ *                           of bpf cgroup data
+ * @ref: percpu ref counter structure
+ */
+static void cgroup_bpf_release_fn(struct percpu_ref *ref)
+{
+	struct cgroup *cgrp = container_of(ref, struct cgroup, bpf.refcnt);
+
+	INIT_WORK(&cgrp->bpf.release_work, cgroup_bpf_release);
+	queue_work(system_wq, &cgrp->bpf.release_work);
 }
 
 /* Get underlying bpf_prog of bpf_prog_list entry, regardless if it's through
@@ -252,7 +267,12 @@ int cgroup_bpf_inherit(struct cgroup *cgrp)
  */
 #define	NR ARRAY_SIZE(cgrp->bpf.effective)
 	struct bpf_prog_array __rcu *arrays[NR] = {};
-	int i;
+	int ret, i;
+
+	ret = percpu_ref_init(&cgrp->bpf.refcnt, cgroup_bpf_release_fn, 0,
+			      GFP_KERNEL);
+	if (ret)
+		return ret;
 
 	for (i = 0; i < NR; i++)
 		INIT_LIST_HEAD(&cgrp->bpf.progs[i]);
@@ -268,7 +288,49 @@ int cgroup_bpf_inherit(struct cgroup *cgrp)
 cleanup:
 	for (i = 0; i < NR; i++)
 		bpf_prog_array_free(arrays[i]);
+
+	percpu_ref_exit(&cgrp->bpf.refcnt);
+
 	return -ENOMEM;
+}
+
+static int update_effective_progs(struct cgroup *cgrp,
+				  enum bpf_attach_type type)
+{
+	struct cgroup_subsys_state *css;
+	int err;
+
+	/* allocate and recompute effective prog arrays */
+	css_for_each_descendant_pre(css, &cgrp->self) {
+		struct cgroup *desc = container_of(css, struct cgroup, self);
+
+		err = compute_effective_progs(desc, type, &desc->bpf.inactive);
+		if (err)
+			goto cleanup;
+	}
+
+	/* all allocations were successful. Activate all prog arrays */
+	css_for_each_descendant_pre(css, &cgrp->self) {
+		struct cgroup *desc = container_of(css, struct cgroup, self);
+
+		activate_effective_progs(desc, type, desc->bpf.inactive);
+		desc->bpf.inactive = NULL;
+	}
+
+	return 0;
+
+cleanup:
+	/* oom while computing effective. Free all computed effective arrays
+	 * since they were not activated
+	 */
+	css_for_each_descendant_pre(css, &cgrp->self) {
+		struct cgroup *desc = container_of(css, struct cgroup, self);
+
+		bpf_prog_array_free(desc->bpf.inactive);
+		desc->bpf.inactive = NULL;
+	}
+
+	return err;
 }
 
 #define BPF_CGROUP_MAX_PROGS 64
@@ -378,7 +440,9 @@ int __cgroup_bpf_attach(struct cgroup *cgrp,
 		}
 	} else {
 		pl = kmalloc(sizeof(*pl), GFP_KERNEL);
-		if (!pl)
+		if (!pl) {
+			for_each_cgroup_storage_type(stype)
+ 				bpf_cgroup_storage_free(storage[stype]);
 			return -ENOMEM;
 		}
 		list_add_tail(&pl->node, progs);
@@ -389,22 +453,9 @@ int __cgroup_bpf_attach(struct cgroup *cgrp,
 	bpf_cgroup_storages_assign(pl->storage, storage);
 	cgrp->bpf.flags[type] = saved_flags;
 
-	/* allocate and recompute effective prog arrays */
-	css_for_each_descendant_pre(css, &cgrp->self) {
-		struct cgroup *desc = container_of(css, struct cgroup, self);
-
-		err = compute_effective_progs(desc, type, &desc->bpf.inactive);
-		if (err)
-			goto cleanup;
-	}
-
-	/* all allocations were successful. Activate all prog arrays */
-	css_for_each_descendant_pre(css, &cgrp->self) {
-		struct cgroup *desc = container_of(css, struct cgroup, self);
-
-		activate_effective_progs(desc, type, desc->bpf.inactive);
-		desc->bpf.inactive = NULL;
-	}
+	err = update_effective_progs(cgrp, type);
+	if (err)
+		goto cleanup;
 
 	bpf_cgroup_storages_free(old_storage);
 	if (old_prog)
@@ -581,6 +632,7 @@ int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 			struct bpf_cgroup_link *link, enum bpf_attach_type type)
 {
 	struct list_head *progs = &cgrp->bpf.progs[type];
+	enum bpf_cgroup_storage_type stype;
 	u32 flags = cgrp->bpf.flags[type];
 	struct bpf_prog_list *pl;
 	struct bpf_prog *old_prog;
@@ -599,25 +651,16 @@ int __cgroup_bpf_detach(struct cgroup *cgrp, struct bpf_prog *prog,
 	pl->prog = NULL;
 	pl->link = NULL;
 
-	/* allocate and recompute effective prog arrays */
-	css_for_each_descendant_pre(css, &cgrp->self) {
-		struct cgroup *desc = container_of(css, struct cgroup, self);
-
-		err = compute_effective_progs(desc, type, &desc->bpf.inactive);
-		if (err)
-			goto cleanup;
-	}
-
-	/* all allocations were successful. Activate all prog arrays */
-	css_for_each_descendant_pre(css, &cgrp->self) {
-		struct cgroup *desc = container_of(css, struct cgroup, self);
-
-		activate_effective_progs(desc, type, desc->bpf.inactive);
-		desc->bpf.inactive = NULL;
-	}
+	err = update_effective_progs(cgrp, type);
+	if (err)
+		goto cleanup;
 
 	/* now can actually delete it from this cgroup list */
 	list_del(&pl->node);
+	for_each_cgroup_storage_type(stype) {
+ 		bpf_cgroup_storage_unlink(pl->storage[stype]);
+ 		bpf_cgroup_storage_free(pl->storage[stype]);
+ 	}
 	kfree(pl);
 	if (list_empty(progs))
 		/* last program was detached, reset flags to zero */
@@ -737,6 +780,7 @@ static void bpf_cgroup_link_release(struct bpf_link *link)
 {
 	struct bpf_cgroup_link *cg_link =
 		container_of(link, struct bpf_cgroup_link, link);
+	struct cgroup *cg;
 
 	/* link might have been auto-detached by dying cgroup already,
 	 * in that case our work is done here
@@ -755,8 +799,11 @@ static void bpf_cgroup_link_release(struct bpf_link *link)
 	WARN_ON(__cgroup_bpf_detach(cg_link->cgroup, NULL, cg_link,
 				    cg_link->type));
 
+	cg = cg_link->cgroup;
+	cg_link->cgroup = NULL;
+
 	mutex_unlock(&cgroup_mutex);
-	cgroup_put(cg_link->cgroup);
+	cgroup_put(cg);
 }
 
 static void bpf_cgroup_link_dealloc(struct bpf_link *link)
@@ -765,6 +812,12 @@ static void bpf_cgroup_link_dealloc(struct bpf_link *link)
 		container_of(link, struct bpf_cgroup_link, link);
 
 	kfree(cg_link);
+}
+
+static int bpf_cgroup_link_detach(struct bpf_link *link)
+{
+	bpf_cgroup_link_release(link);
+	return 0;
 }
 
 static void bpf_cgroup_link_show_fdinfo(const struct bpf_link *link,
@@ -806,6 +859,7 @@ static int bpf_cgroup_link_fill_link_info(const struct bpf_link *link,
 static const struct bpf_link_ops bpf_cgroup_link_lops = {
 	.release = bpf_cgroup_link_release,
 	.dealloc = bpf_cgroup_link_dealloc,
+	.detach = bpf_cgroup_link_detach,
 	.update_prog = cgroup_bpf_replace,
 	.show_fdinfo = bpf_cgroup_link_show_fdinfo,
 	.fill_link_info = bpf_cgroup_link_fill_link_info,
@@ -892,6 +946,7 @@ int __cgroup_bpf_run_filter_skb(struct sock *sk,
 {
 	unsigned int offset = skb->data - skb_network_header(skb);
 	struct sock *save_sk;
+	void *saved_data_end;
 	struct cgroup *cgrp;
 	int ret;
 
@@ -905,8 +960,13 @@ int __cgroup_bpf_run_filter_skb(struct sock *sk,
 	save_sk = skb->sk;
 	skb->sk = sk;
 	__skb_push(skb, offset);
+
+	/* compute pointers for the bpf prog */
+	bpf_compute_and_save_data_end(skb, &saved_data_end);
+
 	ret = BPF_PROG_RUN_ARRAY(cgrp->bpf.effective[type], skb,
-				 bpf_prog_run_save_cb);
+				 __bpf_prog_run_save_cb);
+	bpf_restore_data_end(skb, saved_data_end);
 	__skb_pull(skb, offset);
 	skb->sk = save_sk;
 	return ret == 1 ? 0 : -EPERM;
@@ -943,6 +1003,7 @@ EXPORT_SYMBOL(__cgroup_bpf_run_filter_sk);
  * @sk: sock struct that will use sockaddr
  * @uaddr: sockaddr struct provided by user
  * @type: The type of program to be exectuted
+ * @t_ctx: Pointer to attach type specific context
  *
  * socket is expected to be of type INET or INET6.
  *
@@ -951,12 +1012,15 @@ EXPORT_SYMBOL(__cgroup_bpf_run_filter_sk);
  */
 int __cgroup_bpf_run_filter_sock_addr(struct sock *sk,
 				      struct sockaddr *uaddr,
-				      enum bpf_attach_type type)
+				      enum bpf_attach_type type,
+				      void *t_ctx)
 {
 	struct bpf_sock_addr_kern ctx = {
 		.sk = sk,
 		.uaddr = uaddr,
+		.t_ctx = t_ctx,
 	};
+	struct sockaddr_storage unspec;
 	struct cgroup *cgrp;
 	int ret;
 
@@ -965,6 +1029,11 @@ int __cgroup_bpf_run_filter_sock_addr(struct sock *sk,
 	 */
 	if (sk->sk_family != AF_INET && sk->sk_family != AF_INET6)
 		return 0;
+
+	if (!ctx.uaddr) {
+		memset(&unspec, 0, sizeof(unspec));
+		ctx.uaddr = (struct sockaddr *)&unspec;
+	}
 
 	cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);
 	ret = BPF_PROG_RUN_ARRAY(cgrp->bpf.effective[type], &ctx, BPF_PROG_RUN);
