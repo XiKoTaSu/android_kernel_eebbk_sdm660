@@ -61,6 +61,12 @@ struct sock *inet6_lookup_listener(struct net *net,
 				   const unsigned short hnum,
 				   const int dif, const int sdif);
 
+static inline bool inet6_exact_dif_match(struct net *net,
+				       struct sk_buff *skb)
+{
+	return false;
+}
+
 static inline struct sock *__inet6_lookup(struct net *net,
 					  struct inet_hashinfo *hashinfo,
 					  struct sk_buff *skb, int doff,
