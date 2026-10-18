@@ -424,6 +424,7 @@ struct sock {
 
 	kmemcheck_bitfield_begin(flags);
 	unsigned int		sk_shutdown  : 2,
+				sk_kern_sock : 1,
 				sk_no_check_tx : 1,
 				sk_no_check_rx : 1,
 				sk_userlocks : 4,
@@ -464,12 +465,15 @@ struct sock {
 #endif
 	u16			sk_tsflags;
 	u32			sk_tskey;
+	atomic_t		sk_zckey;
 	struct socket		*sk_socket;
 	void			*sk_user_data;
 	struct page_frag	sk_frag;
 	struct sk_buff		*sk_send_head;
 	__s32			sk_peek_off;
 	int			sk_write_pending;
+	__u32			sk_dst_pending_confirm;
+	u32			sk_pacing_status; /* see enum sk_pacing */
 #ifdef CONFIG_SECURITY
 	void			*sk_security;
 #endif
@@ -492,6 +496,12 @@ struct sock {
 #if IS_ENABLED(CONFIG_PROVE_LOCKING) && IS_ENABLED(CONFIG_MODULES)
 	struct module		*sk_owner;
 #endif
+};
+
+enum sk_pacing {
+	SK_PACING_NONE		= 0,
+	SK_PACING_NEEDED	= 1,
+	SK_PACING_FQ		= 2,
 };
 
 #define __sk_user_data(sk) ((*((void __rcu **)&(sk)->sk_user_data)))
@@ -1631,6 +1641,7 @@ static inline bool sock_allow_reclassification(const struct sock *csk)
 	return !sk->sk_lock.owned && !spin_is_locked(&sk->sk_lock.slock);
 }
 
+void sk_free_unlock_clone(struct sock *sk);
 struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 		      struct proto *prot, int kern);
 void sk_free(struct sock *sk);
@@ -1667,6 +1678,7 @@ void sk_send_sigurg(struct sock *sk);
 
 struct sockcm_cookie {
 	u32 mark;
+	u16 tsflags;
 };
 
 int sock_cmsg_send(struct sock *sk, struct msghdr *msg,
