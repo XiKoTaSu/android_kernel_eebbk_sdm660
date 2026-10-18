@@ -95,6 +95,7 @@ struct net {
 	struct netns_mib	mib;
 	struct netns_packet	packet;
 	struct netns_unix	unx;
+	atomic64_t		net_cookie; /* written once */
 	struct netns_ipv4	ipv4;
 #if IS_ENABLED(CONFIG_IPV6)
 	struct netns_ipv6	ipv6;
@@ -226,6 +227,8 @@ static inline int check_net(const struct net *net)
 }
 
 void net_drop_ns(void *);
+
+u64 net_gen_cookie(struct net *net);
 
 #else
 

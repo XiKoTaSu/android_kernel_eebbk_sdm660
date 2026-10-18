@@ -19,6 +19,22 @@
 #include <net/sock.h>
 #include <net/netlink.h>
 #include <net/net_namespace.h>
+
+static atomic64_t cookie_gen;
+
+u64 net_gen_cookie(struct net *net)
+{
+	while (1) {
+		u64 res = atomic64_read(&net->net_cookie);
+
+		if (res)
+			return res;
+		res = atomic64_inc_return(&cookie_gen);
+		atomic64_cmpxchg(&net->net_cookie, 0, res);
+	}
+}
+
+
 #include <net/netns/generic.h>
 
 /*
