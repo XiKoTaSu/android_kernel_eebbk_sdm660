@@ -392,7 +392,7 @@ fl_create(struct net *net, struct sock *sk, struct in6_flowlabel_req *freq,
 		memset(&flowi6, 0, sizeof(flowi6));
 
 		err = ip6_datagram_send_ctl(net, sk, &msg, &flowi6, fl->opt,
-					    &junk, &junk, &junk);
+					    &junk, &junk, &junk, NULL);
 		if (err)
 			goto done;
 		err = -EINVAL;
