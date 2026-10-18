@@ -802,6 +802,7 @@ enum bpf_netdev_command {
 	 * when it is no longer used.
 	 */
 	XDP_SETUP_PROG,
+	XDP_SETUP_PROG_HW,
 	/* Check if a bpf program is set on the device.  The callee should
 	 * return true if a program is currently attached and running.
 	 */
@@ -833,7 +834,10 @@ struct netdev_bpf {
 	enum bpf_netdev_command command;
 	union {
 		/* XDP_SETUP_PROG */
-		struct bpf_prog *prog;
+		struct {
+			u32 flags;
+			struct bpf_prog *prog;
+		};
 		/* XDP_QUERY_PROG */
 		struct {
 			u8 prog_attached;
