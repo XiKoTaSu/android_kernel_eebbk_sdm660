@@ -172,7 +172,7 @@ int ping_v6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	err = ip6_append_data(sk, ping_getfrag, &pfh, len,
 			      0, hlimit,
 			      np->tclass, NULL, &fl6, rt,
-			      MSG_DONTWAIT, np->dontfrag);
+			      MSG_DONTWAIT, np->dontfrag, NULL);
 
 	if (err) {
 		ICMP6_INC_STATS(sock_net(sk), rt->rt6i_idev,
