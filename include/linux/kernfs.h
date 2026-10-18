@@ -105,6 +105,13 @@ struct kernfs_elem_attr {
  * accessible.  Dereferencing elem or any other outer entity requires
  * active reference.
  */
+union kernfs_node_id {
+	struct {
+		u32		ino;
+		u32		generation;
+	};
+};
+
 struct kernfs_node {
 	atomic_t		count;
 	atomic_t		active;
@@ -128,6 +135,7 @@ struct kernfs_node {
 		struct kernfs_elem_dir		dir;
 		struct kernfs_elem_symlink	symlink;
 		struct kernfs_elem_attr		attr;
+		union kernfs_node_id	id;
 	};
 
 	void			*priv;
