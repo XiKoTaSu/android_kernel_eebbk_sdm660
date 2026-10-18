@@ -423,15 +423,16 @@ struct sock {
 #endif
 
 	kmemcheck_bitfield_begin(flags);
-	unsigned int		sk_shutdown  : 2,
+	u8			sk_padding : 1,
 				sk_kern_sock : 1,
 				sk_no_check_tx : 1,
 				sk_no_check_rx : 1,
-				sk_userlocks : 4,
-				sk_protocol  : 8,
-				sk_type      : 16;
+				sk_userlocks : 4;
+	u16			sk_type;
+	u16			sk_protocol;
 #define SK_PROTOCOL_MAX U8_MAX
 	kmemcheck_bitfield_end(flags);
+	u8			sk_shutdown;
 	int			sk_wmem_queued;
 	gfp_t			sk_allocation;
 	u32			sk_pacing_rate; /* bytes per second */

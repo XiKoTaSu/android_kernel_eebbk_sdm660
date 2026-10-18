@@ -395,7 +395,7 @@ void tcp_init_sock(struct sock *sk)
 
 	icsk->icsk_rto = TCP_TIMEOUT_INIT;
 	tp->mdev_us = jiffies_to_usecs(TCP_TIMEOUT_INIT);
-	tp->rtt_min[0].rtt = ~0U;
+	minmax_reset(&tp->rtt_min, tcp_jiffies32, ~0U);
 
 	/* So many TCP implementations out there (incorrectly) count the
 	 * initial SYN frame in their delayed-ACK and congestion control
@@ -3232,7 +3232,8 @@ void __init tcp_init(void)
 	unsigned int i;
 
 	BUILD_BUG_ON(TCP_MIN_SND_MSS <= MAX_TCP_OPTION_SPACE);
-	sock_skb_cb_check_size(sizeof(struct tcp_skb_cb));
+	BUILD_BUG_ON(sizeof(struct tcp_skb_cb) >
+		     FIELD_SIZEOF(struct sk_buff, cb));
 
 	percpu_counter_init(&tcp_sockets_allocated, 0, GFP_KERNEL);
 	percpu_counter_init(&tcp_orphan_count, 0, GFP_KERNEL);
