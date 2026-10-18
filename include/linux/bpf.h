@@ -864,6 +864,7 @@ int bpf_map_charge_memlock(struct bpf_map *map, u32 pages);
 void bpf_map_uncharge_memlock(struct bpf_map *map, u32 pages);
 void *bpf_map_area_alloc(size_t size, int numa_node);
 void *bpf_map_area_mmapable_alloc(size_t size, int numa_node);
+u32 bpf_map_fd_sys_lookup_elem(void *ptr);
 void bpf_map_area_free(void *base);
 bool bpf_map_write_active(const struct bpf_map *map);
 void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr);

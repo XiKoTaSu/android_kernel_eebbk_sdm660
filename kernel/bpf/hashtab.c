@@ -17,6 +17,7 @@
 #include <linux/overflow.h>
 #include <linux/rculist_nulls.h>
 #include <linux/random.h>
+#include <linux/mm.h>
 #include <uapi/linux/btf.h>
 #include "percpu_freelist.h"
 #include "bpf_lru_list.h"
