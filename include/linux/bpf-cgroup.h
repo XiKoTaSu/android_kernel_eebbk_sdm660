@@ -90,6 +90,7 @@ struct cgroup_bpf {
 	struct bpf_prog_array __rcu *inactive;
 };
 
+void cgroup_bpf_get(struct cgroup *cgrp);
 void cgroup_bpf_put(struct cgroup *cgrp);
 int cgroup_bpf_inherit(struct cgroup *cgrp);
 

@@ -88,8 +88,14 @@ static void bpf_cgroup_link_auto_detach(struct bpf_cgroup_link *link)
 	link->cgroup = NULL;
 }
 
-/**
- * cgroup_bpf_put() - put references of all bpf programs
+void cgroup_bpf_get(struct cgroup *cgrp)
+{
+	/* Local tree keeps cgroup refcounting on sock_cgroup_data via
+	 * cgroup_get/cgroup_put; bpf prog list is released only at cgroup
+	 * teardown, so a get-side callback is not needed here.
+	 */
+}
+
  * @cgrp: the cgroup to modify
  */
 void cgroup_bpf_put(struct cgroup *cgrp)

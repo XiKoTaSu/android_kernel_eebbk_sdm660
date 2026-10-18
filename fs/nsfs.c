@@ -178,6 +178,24 @@ static long ns_ioctl(struct file *filp, unsigned int ioctl,
 	}
 }
 
+
+void *ns_get_path_cb(struct path *path, ns_get_path_helper_t *ns_get_cb,
+		     void *private_data)
+{
+	struct ns_common *ns;
+	void *ret;
+
+again:
+	ns = ns_get_cb(private_data);
+	if (!ns)
+		return ERR_PTR(-ENOENT);
+
+	ret = __ns_get_path(path, ns);
+	if (IS_ERR(ret) && PTR_ERR(ret) == -EAGAIN)
+		goto again;
+	return ret;
+}
+
 int ns_get_name(char *buf, size_t size, struct task_struct *task,
 			const struct proc_ns_operations *ns_ops)
 {
