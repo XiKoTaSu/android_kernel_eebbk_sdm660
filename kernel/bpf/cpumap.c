@@ -144,27 +144,6 @@ free_cmap:
 	return ERR_PTR(err);
 }
 
-static void __cpu_map_queue_destructor(void *ptr)
-{
-	/* The tear-down procedure should have made sure that queue is
-	 * empty.  See __cpu_map_entry_replace() and work-queue
-	 * invoked cpu_map_kthread_stop(). Catch any broken behaviour
-	 * gracefully and warn once.
-	 */
-	if (WARN_ON_ONCE(ptr))
-		__free_page_frag(ptr);
-}
-
-static void put_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
-{
-	if (atomic_dec_and_test(&rcpu->refcnt)) {
-		/* The queue should be empty at this point */
-		ptr_ring_cleanup(rcpu->queue, __cpu_map_queue_destructor);
-		kfree(rcpu->queue);
-		kfree(rcpu);
-	}
-}
-
 static void get_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
 {
 	atomic_inc(&rcpu->refcnt);
@@ -186,45 +165,8 @@ static void cpu_map_kthread_stop(struct work_struct *work)
 	kthread_stop(rcpu->kthread);
 }
 
-/* For now, xdp_pkt is a cpumap internal data structure, with info
- * carried between enqueue to dequeue. It is mapped into the top
- * headroom of the packet, to avoid allocating separate mem.
- */
-struct xdp_pkt {
-	void *data;
-	u16 len;
-	u16 headroom;
-	u16 metasize;
-	struct net_device *dev_rx;
-};
-
-/* Convert xdp_buff to xdp_pkt */
-static struct xdp_pkt *convert_to_xdp_pkt(struct xdp_buff *xdp)
-{
-	struct xdp_pkt *xdp_pkt;
-	int metasize;
-	int headroom;
-
-	/* Assure headroom is available for storing info */
-	headroom = xdp->data - xdp->data_hard_start;
-	metasize = xdp->data - xdp->data_meta;
-	metasize = metasize > 0 ? metasize : 0;
-	if (unlikely((headroom - metasize) < sizeof(*xdp_pkt)))
-		return NULL;
-
-	/* Store info in top of packet */
-	xdp_pkt = xdp->data_hard_start;
-
-	xdp_pkt->data = xdp->data;
-	xdp_pkt->len  = xdp->data_end - xdp->data;
-	xdp_pkt->headroom = headroom - sizeof(*xdp_pkt);
-	xdp_pkt->metasize = metasize;
-
-	return xdp_pkt;
-}
-
 static struct sk_buff *cpu_map_build_skb(struct bpf_cpu_map_entry *rcpu,
-					 struct xdp_pkt *xdp_pkt)
+					 struct xdp_frame *xdpf)
 {
 	unsigned int frame_size;
 	void *pkt_data_start;
@@ -682,8 +624,8 @@ int cpu_map_enqueue(struct bpf_cpu_map_entry *rcpu, struct xdp_buff *xdp,
 {
 	struct xdp_frame *xdpf;
 
-	xdp_pkt = convert_to_xdp_pkt(xdp);
-	if (unlikely(!xdp_pkt))
+	xdpf = convert_to_xdp_frame(xdp);
+	if (unlikely(!xdpf))
 		return -EOVERFLOW;
 
 	/* Info needed when constructing SKB on remote CPU */
