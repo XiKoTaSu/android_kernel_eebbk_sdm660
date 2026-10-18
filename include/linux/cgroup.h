@@ -432,8 +432,8 @@ static inline void cgroup_put(struct cgroup *cgrp)
  * The caller can also specify additional allowed conditions via @__c, such
  * as locks used during the cgroup_subsys::attach() methods.
  */
-#ifdef CONFIG_PROVE_RCU
 extern struct mutex cgroup_mutex;
+#ifdef CONFIG_PROVE_RCU
 extern spinlock_t css_set_lock;
 #define task_css_set_check(task, __c)					\
 	rcu_dereference_check((task)->cgroups,				\
@@ -612,6 +612,11 @@ static inline bool cgroup_is_populated(struct cgroup *cgrp)
 static inline ino_t cgroup_ino(struct cgroup *cgrp)
 {
 	return cgrp->kn->ino;
+}
+
+static inline u64 cgroup_id(struct cgroup *cgrp)
+{
+	return cgrp->kn->id.id;
 }
 
 /* cft/css accessors for cftype->write() operation */
