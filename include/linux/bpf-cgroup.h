@@ -43,6 +43,13 @@ struct bpf_cgroup_storage {
 	struct rcu_head rcu;
 };
 
+int bpf_cgroup_storage_assign(struct bpf_prog *prog, struct bpf_map *map);
+void bpf_cgroup_storage_release(struct bpf_prog *prog, struct bpf_map *map);
+
+int bpf_percpu_cgroup_storage_copy(struct bpf_map *map, void *key, void *value);
+int bpf_percpu_cgroup_storage_update(struct bpf_map *map, void *key,
+				     void *value, u64 flags);
+
 struct bpf_cgroup_link {
 	struct bpf_link link;
 	struct cgroup *cgroup;
