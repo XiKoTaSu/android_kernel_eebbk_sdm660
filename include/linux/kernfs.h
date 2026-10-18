@@ -110,6 +110,7 @@ union kernfs_node_id {
 		u32		ino;
 		u32		generation;
 	};
+	u64			id;
 };
 
 struct kernfs_node {
