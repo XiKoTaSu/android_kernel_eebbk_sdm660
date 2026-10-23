@@ -145,6 +145,16 @@
 #define TRACE_PRINTKS() VMLINUX_SYMBOL(__start___trace_bprintk_fmt) = .;      \
 			 *(__trace_printk_fmt) /* Trace_printk fmt' pointer */ \
 			 VMLINUX_SYMBOL(__stop___trace_bprintk_fmt) = .;
+
+#ifdef CONFIG_BPF_EVENTS
+#define BPF_RAW_TP() STRUCT_ALIGN();                                   \
+ 			VMLINUX_SYMBOL(__start__bpf_raw_tp) = .;       \
+ 			KEEP(*(__bpf_raw_tp_map))                      \
+ 			VMLINUX_SYMBOL(__stop__bpf_raw_tp) = .;
+#else
+#define BPF_RAW_TP()
+#endif
+
 #define TRACEPOINT_STR() VMLINUX_SYMBOL(__start___tracepoint_str) = .;	\
 			 *(__tracepoint_str) /* Trace_printk fmt' pointer */ \
 			 VMLINUX_SYMBOL(__stop___tracepoint_str) = .;
@@ -231,7 +241,8 @@
 	VMLINUX_SYMBOL(__stop___verbose) = .;				\
 	LIKELY_PROFILE()		       				\
 	BRANCH_PROFILE()						\
-	TRACE_PRINTKS()							\
+	TRACE_PRINTKS()						\
+	BPF_RAW_TP()                                                    \
 	TRACEPOINT_STR()
 
 /*

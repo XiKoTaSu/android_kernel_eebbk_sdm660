@@ -4496,3 +4496,176 @@ bool btf_id_set_contains(const struct btf_id_set *set, u32 id)
 {
 	return bsearch(&id, set->ids, set->cnt, sizeof(u32), btf_id_cmp_func) != NULL;
 }
+
+bool btf_struct_ids_match(struct bpf_verifier_log *log,
+			  int off, u32 id, u32 need_type_id)
+{
+	const struct btf_type *type;
+	int err;
+
+	/* Are we already done? */
+	if (need_type_id == id && off == 0)
+		return true;
+
+again:
+	type = btf_type_by_id(btf_vmlinux, id);
+	if (!type)
+		return false;
+	err = btf_struct_walk(log, type, off, 1, &id);
+	if (err != WALK_STRUCT)
+		return false;
+
+	/* We found nested struct object. If it matches
+	 * the requested ID, we're done. Otherwise let's
+	 * continue the search with offset 0 in the new
+	 * type.
+	 */
+	if (need_type_id != id) {
+		off = 0;
+		goto again;
+	}
+
+	return true;
+}
+
+/* Compare BTFs of two functions assuming only scalars and pointers to context.
+ * t1 points to BTF_KIND_FUNC in btf1
+ * t2 points to BTF_KIND_FUNC in btf2
+ * Returns:
+ * EINVAL - function prototype mismatch
+ * EFAULT - verifier bug
+ * 0 - 99% match. The last 1% is validated by the verifier.
+ */
+int btf_check_func_type_match(struct bpf_verifier_log *log,
+			      struct btf *btf1, const struct btf_type *t1,
+			      struct btf *btf2, const struct btf_type *t2)
+{
+	const struct btf_param *args1, *args2;
+	const char *fn1, *fn2, *s1, *s2;
+	u32 nargs1, nargs2, i;
+
+	fn1 = btf_name_by_offset(btf1, t1->name_off);
+	fn2 = btf_name_by_offset(btf2, t2->name_off);
+
+	if (btf_func_linkage(t1) != BTF_FUNC_GLOBAL) {
+		bpf_log(log, "%s() is not a global function\n", fn1);
+		return -EINVAL;
+	}
+	if (btf_func_linkage(t2) != BTF_FUNC_GLOBAL) {
+		bpf_log(log, "%s() is not a global function\n", fn2);
+		return -EINVAL;
+	}
+
+	t1 = btf_type_by_id(btf1, t1->type);
+	if (!t1 || !btf_type_is_func_proto(t1))
+		return -EFAULT;
+	t2 = btf_type_by_id(btf2, t2->type);
+	if (!t2 || !btf_type_is_func_proto(t2))
+		return -EFAULT;
+
+	args1 = (const struct btf_param *)(t1 + 1);
+	nargs1 = btf_type_vlen(t1);
+	args2 = (const struct btf_param *)(t2 + 1);
+	nargs2 = btf_type_vlen(t2);
+
+	if (nargs1 != nargs2) {
+		bpf_log(log, "%s() has %d args while %s() has %d args\n",
+			fn1, nargs1, fn2, nargs2);
+		return -EINVAL;
+	}
+
+	t1 = btf_type_skip_modifiers(btf1, t1->type, NULL);
+	t2 = btf_type_skip_modifiers(btf2, t2->type, NULL);
+	if (t1->info != t2->info) {
+		bpf_log(log,
+			"Return type %s of %s() doesn't match type %s of %s()\n",
+			btf_type_str(t1), fn1,
+			btf_type_str(t2), fn2);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < nargs1; i++) {
+		t1 = btf_type_skip_modifiers(btf1, args1[i].type, NULL);
+		t2 = btf_type_skip_modifiers(btf2, args2[i].type, NULL);
+
+		if (t1->info != t2->info) {
+			bpf_log(log, "arg%d in %s() is %s while %s() has %s\n",
+				i, fn1, btf_type_str(t1),
+				fn2, btf_type_str(t2));
+			return -EINVAL;
+		}
+		if (btf_type_has_size(t1) && t1->size != t2->size) {
+			bpf_log(log,
+				"arg%d in %s() has size %d while %s() has %d\n",
+				i, fn1, t1->size,
+				fn2, t2->size);
+			return -EINVAL;
+		}
+
+		/* global functions are validated with scalars and pointers
+		 * to context only. And only global functions can be replaced.
+		 * Hence type check only those types.
+		 */
+		if (btf_type_is_int(t1) || btf_type_is_enum(t1))
+			continue;
+		if (!btf_type_is_ptr(t1)) {
+			bpf_log(log,
+				"arg%d in %s() has unrecognized type\n",
+				i, fn1);
+			return -EINVAL;
+		}
+		t1 = btf_type_skip_modifiers(btf1, t1->type, NULL);
+		t2 = btf_type_skip_modifiers(btf2, t2->type, NULL);
+		if (!btf_type_is_struct(t1)) {
+			bpf_log(log,
+				"arg%d in %s() is not a pointer to context\n",
+				i, fn1);
+			return -EINVAL;
+		}
+		if (!btf_type_is_struct(t2)) {
+			bpf_log(log,
+				"arg%d in %s() is not a pointer to context\n",
+				i, fn2);
+			return -EINVAL;
+		}
+		/* This is an optional check to make program writing easier.
+		 * Compare names of structs and report an error to the user.
+		 * btf_prepare_func_args() already checked that t2 struct
+		 * is a context type. btf_prepare_func_args() will check
+		 * later that t1 struct is a context type as well.
+		 */
+		s1 = btf_name_by_offset(btf1, t1->name_off);
+		s2 = btf_name_by_offset(btf2, t2->name_off);
+		if (strcmp(s1, s2)) {
+			bpf_log(log,
+				"arg%d %s(struct %s *) doesn't match %s(struct %s *)\n",
+				i, fn1, s1, fn2, s2);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
+/* Compare BTFs of given program with BTF of target program */
+int btf_check_type_match(struct bpf_verifier_env *env, struct bpf_prog *prog,
+			 struct btf *btf2, const struct btf_type *t2)
+{
+	struct btf *btf1 = prog->aux->btf;
+	const struct btf_type *t1;
+	u32 btf_id = 0;
+
+	if (!prog->aux->func_info) {
+		bpf_log(&env->log, "Program extension requires BTF\n");
+		return -EINVAL;
+	}
+
+	btf_id = prog->aux->func_info[0].type_id;
+	if (!btf_id)
+		return -EFAULT;
+
+	t1 = btf_type_by_id(btf1, btf_id);
+	if (!t1 || !btf_type_is_func(t1))
+		return -EFAULT;
+
+	return btf_check_func_type_match(&env->log, btf1, t1, btf2, t2);
+}
