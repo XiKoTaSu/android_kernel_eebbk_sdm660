@@ -32,9 +32,6 @@ void cgroup_bpf_put(struct cgroup *cgrp)
 	percpu_ref_put(&cgrp->bpf.refcnt);
 }
 
-
-EXPORT_SYMBOL(cgroup_bpf_enabled_key);
-
 void cgroup_bpf_offline(struct cgroup *cgrp)
 {
 	cgroup_get(cgrp);
