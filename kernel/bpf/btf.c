@@ -4497,37 +4497,6 @@ bool btf_id_set_contains(const struct btf_id_set *set, u32 id)
 	return bsearch(&id, set->ids, set->cnt, sizeof(u32), btf_id_cmp_func) != NULL;
 }
 
-bool btf_struct_ids_match(struct bpf_verifier_log *log,
-			  int off, u32 id, u32 need_type_id)
-{
-	const struct btf_type *type;
-	int err;
-
-	/* Are we already done? */
-	if (need_type_id == id && off == 0)
-		return true;
-
-again:
-	type = btf_type_by_id(btf_vmlinux, id);
-	if (!type)
-		return false;
-	err = btf_struct_walk(log, type, off, 1, &id);
-	if (err != WALK_STRUCT)
-		return false;
-
-	/* We found nested struct object. If it matches
-	 * the requested ID, we're done. Otherwise let's
-	 * continue the search with offset 0 in the new
-	 * type.
-	 */
-	if (need_type_id != id) {
-		off = 0;
-		goto again;
-	}
-
-	return true;
-}
-
 /* Compare BTFs of two functions assuming only scalars and pointers to context.
  * t1 points to BTF_KIND_FUNC in btf1
  * t2 points to BTF_KIND_FUNC in btf2
