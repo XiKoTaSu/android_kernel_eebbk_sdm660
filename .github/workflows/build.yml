@@ -26,9 +26,9 @@ jobs:
           cd $GITHUB_WORKSPACE/workdir
           echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      - name: 獲取 GCC4.9 工具鏈
+      - name: 獲取 GCC6.3.1 工具鏈
         run: |
-          git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 -b lineage-19.1 --depth=1 $GITHUB_WORKSPACE/workdir/gcc
+          git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-6.3.1 -b lineage-16.0 --depth=1 $GITHUB_WORKSPACE/workdir/gcc
           
       - name: 獲取核心源碼
         run: |
@@ -48,7 +48,7 @@ jobs:
           export ARCH="arm64"
           export SUBARCH="arm64"
           export PATH="$GITHUB_WORKSPACE/workdir/gcc/bin/:$PATH"
-          export CROSS_COMPILE="aarch64-linux-android-"                    
+          export CROSS_COMPILE="aarch64-linux-"                    
           cd $GITHUB_WORKSPACE/workdir/source
           export DTB_NAMES="qcom/eebbk/sda660-mtp-H7000"
           make O=out sdm660-perf_defconfig vendor/eebbk/H7000.config vendor/eebbk/sdm660-common.config
