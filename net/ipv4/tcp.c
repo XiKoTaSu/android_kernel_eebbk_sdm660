@@ -3306,15 +3306,3 @@ void __init tcp_init(void)
 	BUG_ON(tcp_register_congestion_control(&tcp_reno) != 0);
 	tcp_tasklet_init();
 }
-
-bool tcp_add_backlog(struct sock *sk, struct sk_buff *skb)
-{
-	u32 limit = sk->sk_rcvbuf + sk->sk_sndbuf;
-
-	if (sk_rcvqueues_full(sk, limit) &&
-	    sk_rmem_schedule(sk, skb, skb->truesize))
-		return true;
-
-	__sk_add_backlog(sk, skb);
-	return false;
-}
