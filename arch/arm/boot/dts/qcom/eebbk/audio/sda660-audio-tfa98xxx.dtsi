@@ -163,6 +163,26 @@
  */
 &clock_audio {
 	status = "okay";
+	/*
+	 * H7000: drop the lpi_mclk0 pinctrl (LPI gpio18, func2).  The stock
+	 * h7000.dts has no pinctrl here at all - this driver only needs
+	 * qcom,mclk-clk-reg + qcom,audio-ref-clk-gpio to gate the speaker
+	 * MCLK.  With the pinctrl in place LPI gpio18 stays claimed by
+	 * audio_ext_clk whenever the speakers play, and then the capture
+	 * path cannot apply its own state on the same pin:
+	 *
+	 *   qcom-lpi-pinctrl 15070000.lpi_pinctrl: pin gpio18 already
+	 *   requested by soc:audio_ext_clk; cannot claim for
+	 *   soc:cdc_pdm_pinctrl
+	 *   msm-cdc-pinctrl soc:cdc_pdm_pinctrl: Error applying setting
+	 *
+	 * which makes msm_int_mclk0_event() fail again and kills the mic.
+	 * On stock gpio18 is only claimed by cdc_pdm_gpios_active while the
+	 * int-codec capture path is up (func1 = codec MCLK/PDM).
+	 */
+	/delete-property/ pinctrl-names;
+	/delete-property/ pinctrl-0;
+	/delete-property/ pinctrl-1;
 };
 
 &wcd_rst_gpio {
