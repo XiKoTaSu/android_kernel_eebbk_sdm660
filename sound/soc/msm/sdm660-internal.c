@@ -713,8 +713,19 @@ static int msm_int_enable_dig_cdc_clk(struct snd_soc_codec *codec,
 			cancel_delayed_work_sync(
 					&pdata->disable_int_mclk0_work);
 			mutex_lock(&pdata->cdc_int_mclk0_mutex);
-			if (atomic_read(&pdata->int_mclk0_enabled) == false ||
-				int_mclk0_freq_chg) {
+			/*
+			 * H7000: do NOT trust pdata->int_mclk0_enabled here.  The
+			 * cached flag can be left true while the LPASS clock has
+			 * already been gated (e.g. SEC_MI2S playback stop drops the
+			 * refcount to 0 but the flag stays set), and then this
+			 * first-user path used to skip the AFE clock command
+			 * entirely: the digital codec then runs without its 9.6MHz
+			 * core clock, the DMIC/ADC blocks stay silent and every
+			 * capture is pure digital zero even though all codec
+			 * registers look correct.  Always (re)program the clock for
+			 * the first user.
+			 */
+			if (1) {
 				if (atomic_read(&pdata->int_mclk0_enabled)) {
 					pdata->digital_cdc_core_clk.enable = 0;
 					afe_set_lpass_clock_v2(
@@ -746,7 +757,16 @@ static int msm_int_enable_dig_cdc_clk(struct snd_soc_codec *codec,
 	} else {
 		cancel_delayed_work_sync(&pdata->disable_int_mclk0_work);
 		mutex_lock(&pdata->cdc_int_mclk0_mutex);
-		if (atomic_read(&pdata->int_mclk0_enabled) == true) {
+		/*
+		 * H7000: honour the refcount on the way down as well.  The old
+		 * code forced the clock off and reset the counter on every
+		 * disable, so stopping SEC_MI2S playback (or a UI sound) killed
+		 * the codec clock while the capture path was still using it.
+		 */
+		if (atomic_read(&pdata->int_mclk0_rsc_ref) > 0)
+			atomic_dec(&pdata->int_mclk0_rsc_ref);
+		if (!atomic_read(&pdata->int_mclk0_rsc_ref) &&
+		    atomic_read(&pdata->int_mclk0_enabled) == true) {
 			pdata->digital_cdc_core_clk.clk_freq_in_hz =
 						DEFAULT_MCLK_RATE;
 			pdata->digital_cdc_core_clk.enable = 0;
