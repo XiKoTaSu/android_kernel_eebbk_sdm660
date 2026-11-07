@@ -12,33 +12,28 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential git curl
+        run: sudo apt-get update && sudo apt-get install -y build-essential git
 
       - name: Fetch aarch64 gcc
-        run: |
-          git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-9.3 -b lineage-19.1 --depth=1 $GITHUB_WORKSPACE/gcc
-          ls $GITHUB_WORKSPACE/gcc/bin | head
-          find $GITHUB_WORKSPACE/gcc -name 'libc.a' | head
+        run: git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-9.3 -b lineage-19.1 --depth=1 $GITHUB_WORKSPACE/gcc
 
-      - name: Build tinyalsa tools (static)
+      - name: Build tinyalsa utils statically
         run: |
           export PATH="$GITHUB_WORKSPACE/gcc/bin:$PATH"
+          CC=aarch64-linux-gcc
           git clone https://github.com/tinyalsa/tinyalsa --depth=1 $GITHUB_WORKSPACE/tinyalsa
           cd $GITHUB_WORKSPACE/tinyalsa
-          make clean || true
-          make CC=aarch64-linux-gcc CFLAGS="-O2 -static" LDFLAGS="-static" -j$(nproc) 2>&1 | tail -20
-          ls -l utils/
-          for f in utils/tinycap utils/tinymix utils/tinyplay; do
-            echo "== $f"; readelf -l $f | grep -c INTERP || true
+          mkdir -p out
+          SRCS="src/mixer.c src/pcm.c src/pcm_plugin.c src/snd_card_plugin.c src/mixer_plugin.c"
+          for tool in tinycap tinymix tinyplay; do
+            echo "== building $tool"
+            $CC -O2 -static -Iinclude -Isrc -o out/$tool utils/$tool.c $SRCS 2>&1 | tail -5
           done
+          ls -l out/
+          for f in out/*; do echo "-- $f"; readelf -l $f | grep INTERP || echo "   static OK"; done
 
       - name: Upload tools
         uses: actions/upload-artifact@v4
         with:
           name: tinyalsa-tools
-          path: |
-            tinyalsa/utils/tinycap
-            tinyalsa/utils/tinymix
-            tinyalsa/utils/tinyplay
+          path: tinyalsa/out/
