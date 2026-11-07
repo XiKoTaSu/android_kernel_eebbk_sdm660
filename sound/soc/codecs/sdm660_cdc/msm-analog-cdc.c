@@ -3169,6 +3169,8 @@ int msm_anlg_cdc_mclk_enable(struct snd_soc_codec *codec,
 
 	dev_dbg(codec->dev, "%s: mclk_enable = %u, dapm = %d\n",
 		__func__, mclk_enable, dapm);
+	dev_info(codec->dev, "H7000DBG %s: mclk_enable=%d flag=%d\n",
+		 __func__, mclk_enable, sdm660_cdc->int_mclk0_enabled);
 	if (mclk_enable) {
 		sdm660_cdc->int_mclk0_enabled = true;
 		msm_anlg_cdc_codec_enable_clock_block(codec, 1);

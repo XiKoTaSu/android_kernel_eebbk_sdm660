@@ -689,6 +689,9 @@ static int msm_int_enable_dig_cdc_clk(struct snd_soc_codec *codec,
 	bool int_mclk0_freq_chg = false;
 
 	pdata = snd_soc_card_get_drvdata(codec->component.card);
+	dev_info(codec->dev, "H7000DBG %s: enable=%d rsc_ref=%d int_mclk0_enabled=%d\n",
+		 __func__, enable, atomic_read(&pdata->int_mclk0_rsc_ref),
+		 atomic_read(&pdata->int_mclk0_enabled));
 	pr_debug("%s: enable %d mclk ref counter %d\n",
 		   __func__, enable,
 		   atomic_read(&pdata->int_mclk0_rsc_ref));
@@ -732,6 +735,9 @@ static int msm_int_enable_dig_cdc_clk(struct snd_soc_codec *codec,
 					return ret;
 				}
 				pr_debug("enabled digital codec core clk\n");
+				dev_info(codec->dev,
+					 "H7000DBG CCLK enable ret=%d freq=%d\n",
+					 ret, clk_freq_in_hz);
 				atomic_set(&pdata->int_mclk0_enabled, true);
 			}
 			mutex_unlock(&pdata->cdc_int_mclk0_mutex);
@@ -1068,6 +1074,7 @@ static int msm_int_mclk0_event(struct snd_soc_dapm_widget *w,
 	int ret = 0;
 
 	pdata = snd_soc_card_get_drvdata(codec->component.card);
+	dev_info(codec->dev, "H7000DBG %s: event=%d\n", __func__, event);
 	pr_debug("%s: event = %d\n", __func__, event);
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
