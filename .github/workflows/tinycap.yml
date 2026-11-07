@@ -1,0 +1,40 @@
+name: Build tinycap
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/tinycap.yml'
+
+jobs:
+  tinycap:
+    name: Build tinycap (aarch64 static)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git curl
+
+      - name: Fetch aarch64 gcc
+        run: |
+          git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-9.3 -b lineage-19.1 --depth=1 $GITHUB_WORKSPACE/gcc
+
+      - name: Build tinyalsa tools
+        run: |
+          export PATH="$GITHUB_WORKSPACE/gcc/bin:$PATH"
+          export CROSS_COMPILE="aarch64-linux-"
+          git clone https://github.com/tinyalsa/tinyalsa --depth=1 $GITHUB_WORKSPACE/tinyalsa
+          cd $GITHUB_WORKSPACE/tinyalsa
+          make CC=${CROSS_COMPILE}gcc LDFLAGS="-static" -j$(nproc) || make CC=${CROSS_COMPILE}gcc -j$(nproc)
+          ls -l utils/
+          file utils/tinycap utils/tinymix utils/tinyplay 2>/dev/null || true
+
+      - name: Upload tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinyalsa-tools
+          path: |
+            tinyalsa/utils/tinycap
+            tinyalsa/utils/tinymix
+            tinyalsa/utils/tinyplay
