@@ -205,16 +205,57 @@
 	status = "disabled";
 };
 
+/*
+ * H7000: the int-codec machine driver NEEDS the cdc pinctrl handles.
+ *
+ * sdm660-external-codec.dtsi (pulled in by sda660-mtp-H7000.dts) disables
+ * cdc_pdm_gpios / cdc_comp_gpios / cdc_dmic_gpios, and an earlier revision of
+ * this file also deleted the matching phandle properties from the sound node.
+ * With both gone pdata->pdm_gpio_p and pdata->dmic_gpio_p stay NULL, so the
+ * DAPM events of the capture path fail:
+ *
+ *   msm_int_mclk0_event(): msm_cdc_pinctrl_select_active_state(NULL) -> -EINVAL
+ *   msm_dmic_event():      msm_cdc_pinctrl_select_active_state(NULL) -> -EINVAL
+ *
+ * The -EINVAL is returned from the DAPM PRE_PMU callback, which aborts the
+ * whole power-up sequence: msm_anlg_cdc_mclk_enable() and
+ * msm_int_enable_dig_cdc_clk() are never reached, so the codec MCLK and the
+ * DMIC clock stay off and DEC1/ADC never power up -> every recording is pure
+ * silence. dmesg shows it as:
+ *
+ *   msm_cdc_pinctrl_get_gpiodata: device node is null
+ *   msm_int_mclk0_event: gpio set cannot be activated int_pdm
+ *   ASoC: PRE_PMU: INT_MCLK0 event failed: -22
+ *   ASoC: PRE_PMU: Digital Mic1 event failed: -22   (.. Mic2/3/4)
+ *
+ * The stock h7000.dts keeps all of these handles and its mic works, so restore
+ * them here and re-enable the three cdc pinctrl nodes (their LPI pin states
+ * live in sdm660-lpi.dtsi and are identical to the stock boot image).
+ */
+&cdc_pdm_gpios {
+	status = "okay";
+};
+
+&cdc_comp_gpios {
+	status = "okay";
+};
+
+&cdc_dmic_gpios {
+	status = "okay";
+};
+
 &int_codec {
 	status = "okay";
-	/* H7000: PM660L analog (INT) codec has no external codec gpios;
-	   sound machine of_get_named_gpio fails without #gpio-cells on
-	   us_euro_gpio / cdc_pdm / cdc_comp / cdc_dmic pinctrl nodes.
-	   Drop the references (same as official QRD int-codec boards). */
+	qcom,cdc-pdm-gpios = <&cdc_pdm_gpios>;
+	qcom,cdc-comp-gpios = <&cdc_comp_gpios>;
+	qcom,cdc-dmic-gpios = <&cdc_dmic_gpios>;
+	/* stock h7000.dts: internal micbias with an external cap on bias1,
+	 * msm-audio.dtsi defaults to "external" + micbias2-ext-cap. */
+	qcom,msm-hs-micbias-type = "internal";
+	qcom,msm-micbias1-ext-cap;
+	/delete-property/ qcom,msm-micbias2-ext-cap;
+	/* no us-euro detection hardware wired on this board */
 	/delete-property/ qcom,us-euro-gpios;
-	/delete-property/ qcom,cdc-pdm-gpios;
-	/delete-property/ qcom,cdc-comp-gpios;
-	/delete-property/ qcom,cdc-dmic-gpios;
 };
 
 &pmic_analog_codec {
