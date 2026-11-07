@@ -19,16 +19,20 @@ jobs:
       - name: Fetch aarch64 gcc
         run: |
           git clone https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-9.3 -b lineage-19.1 --depth=1 $GITHUB_WORKSPACE/gcc
+          ls $GITHUB_WORKSPACE/gcc/bin | head
+          find $GITHUB_WORKSPACE/gcc -name 'libc.a' | head
 
-      - name: Build tinyalsa tools
+      - name: Build tinyalsa tools (static)
         run: |
           export PATH="$GITHUB_WORKSPACE/gcc/bin:$PATH"
-          export CROSS_COMPILE="aarch64-linux-"
           git clone https://github.com/tinyalsa/tinyalsa --depth=1 $GITHUB_WORKSPACE/tinyalsa
           cd $GITHUB_WORKSPACE/tinyalsa
-          make CC=${CROSS_COMPILE}gcc LDFLAGS="-static" -j$(nproc) || make CC=${CROSS_COMPILE}gcc -j$(nproc)
+          make clean || true
+          make CC=aarch64-linux-gcc CFLAGS="-O2 -static" LDFLAGS="-static" -j$(nproc) 2>&1 | tail -20
           ls -l utils/
-          file utils/tinycap utils/tinymix utils/tinyplay 2>/dev/null || true
+          for f in utils/tinycap utils/tinymix utils/tinyplay; do
+            echo "== $f"; readelf -l $f | grep -c INTERP || true
+          done
 
       - name: Upload tools
         uses: actions/upload-artifact@v4
