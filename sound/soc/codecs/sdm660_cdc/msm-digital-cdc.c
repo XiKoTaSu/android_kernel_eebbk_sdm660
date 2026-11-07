@@ -824,8 +824,6 @@ static int msm_dig_cdc_codec_enable_dmic(struct snd_soc_dapm_widget *w,
 	int ret;
 	char *dmic_num = strpbrk(w->name, "1234");
 
-	dev_info(codec->dev, "H7000DBG %s: widget=%s event=%d\n",
-		 __func__, w->name, event);
 
 	if (dmic_num == NULL) {
 		dev_err(codec->dev, "%s: Invalid DMIC\n", __func__);
